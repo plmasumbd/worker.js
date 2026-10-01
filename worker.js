@@ -43,17 +43,29 @@ function extractSrc(input) {
   if (!input) return "";
   let s = input.trim();
 
-  // If input contains <iframe ...> extract src="..."
-  const srcMatch = s.match(/src\s*=\s*["']([^"']+)["']/i);
-  if (srcMatch) return srcMatch[1];
+  // 🎯 Step 1: প্রথমে iframe এর src বের করার চেষ্টা করো (সবচেয়ে নির্ভরযোগ্য)
+  const iframeMatch = s.match(/<iframe[^>]*\ssrc\s*=\s*["']([^"']+)["']/i);
+  if (iframeMatch) return iframeMatch[1];
 
-  // If input has <a href="..."> or similar url pattern, try to grab URL
-  const urlMatch = s.match(/https?:\/\/[^\s"'<>]+/i);
+  // 🎯 Step 2: video/source tag এর src
+  const videoSrcMatch = s.match(/<(?:video|source|embed)[^>]*\ssrc\s*=\s*["']([^"']+)["']/i);
+  if (videoSrcMatch) return videoSrcMatch[1];
+
+  // 🎯 Step 3: শুধু একটা সরল URL দিলে
+  if (/^https?:\/\/\S+$/i.test(s)) return s;
+
+  // 🎯 Step 4: ScreenPal এর জন্য specific pattern
+  const screenpalMatch = s.match(/https?:\/\/go\.screenpal\.com\/player\/[^\s"'<>]+/i);
+  if (screenpalMatch) return screenpalMatch[0];
+
+  // 🎯 Step 5: শেষ চেষ্টা — যেকোনো URL (তবে script tag এর না)
+  // script src বাদ দিয়ে বাকি URL দেখি
+  const cleaned = s.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
+  const urlMatch = cleaned.match(/https?:\/\/[^\s"'<>]+/i);
   if (urlMatch) return urlMatch[0];
 
   return s;
 }
-
 // ==========================================
 // API: List movies
 // ==========================================
