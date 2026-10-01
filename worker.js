@@ -504,10 +504,18 @@ async function loadList(){
       '<h4>'+esc(m.title)+'</h4>'+
       '</div>'+
       '<div class="acts">'+
-      '<button class="primary small" onclick="editMovie(\''+m.id+'\')">Edit</button>'+
-      '<button class="primary small danger" onclick="delMovie(\''+m.id+'\')">Delete</button>'+
+      '<button class="primary small" data-act="edit" data-id="'+m.id+'">Edit</button>'+
+      '<button class="primary small danger" data-act="del" data-id="'+m.id+'">Delete</button>'+
       '</div></div>';
   }).join("");
+  // Event listeners attach করি
+  document.querySelectorAll('[data-act]').forEach(function(btn){
+    btn.onclick = function(){
+      var id = btn.getAttribute('data-id');
+      if(btn.getAttribute('data-act') === 'edit') editMovie(id);
+      else delMovie(id);
+    };
+  });
 }
 async function editMovie(id){
   var p=1,all=[];
