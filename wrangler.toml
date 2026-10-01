@@ -1,0 +1,7 @@
+name = "workerjs"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "MOVIES"
+id = "2cd1871c8aa04842aa6ea2e29a627406"
