@@ -37,35 +37,60 @@ export default {
 };
 
 // ==========================================
-// EXTRACT SRC FROM IFRAME CODE
+// EXTRACT SRC FROM HTML / URL
 // ==========================================
 function extractSrc(input) {
   if (!input) return "";
   let s = input.trim();
 
-  // 🎯 Step 1: প্রথমে iframe এর src বের করার চেষ্টা করো (সবচেয়ে নির্ভরযোগ্য)
+  // iframe tag
   const iframeMatch = s.match(/<iframe[^>]*\ssrc\s*=\s*["']([^"']+)["']/i);
   if (iframeMatch) return iframeMatch[1];
 
-  // 🎯 Step 2: video/source tag এর src
+  // video/source/embed tag
   const videoSrcMatch = s.match(/<(?:video|source|embed)[^>]*\ssrc\s*=\s*["']([^"']+)["']/i);
   if (videoSrcMatch) return videoSrcMatch[1];
 
-  // 🎯 Step 3: শুধু একটা সরল URL দিলে
+  // সরল URL
   if (/^https?:\/\/\S+$/i.test(s)) return s;
 
-  // 🎯 Step 4: ScreenPal এর জন্য specific pattern
+  // ScreenPal specific
   const screenpalMatch = s.match(/https?:\/\/go\.screenpal\.com\/player\/[^\s"'<>]+/i);
   if (screenpalMatch) return screenpalMatch[0];
 
-  // 🎯 Step 5: শেষ চেষ্টা — যেকোনো URL (তবে script tag এর না)
-  // script src বাদ দিয়ে বাকি URL দেখি
+  // শেষ চেষ্টা: script tag বাদ দিয়ে
   const cleaned = s.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
   const urlMatch = cleaned.match(/https?:\/\/[^\s"'<>]+/i);
   if (urlMatch) return urlMatch[0];
 
   return s;
 }
+
+// ==========================================
+// AUTO THUMBNAIL FROM VIDEO URL
+// ==========================================
+function getAutoThumbnail(videoUrl) {
+  if (!videoUrl) return "";
+
+  // YouTube
+  const ytMatch = videoUrl.match(/(?:youtube\.com\/(?:embed\/|watch\?v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  if (ytMatch) return `https://img.youtube.com/vi/${ytMatch[1]}/maxresdefault.jpg`;
+
+  // Vimeo
+  const vimeoMatch = videoUrl.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+  if (vimeoMatch) return `https://vumbnail.com/${vimeoMatch[1]}.jpg`;
+
+  // Dailymotion
+  const dmMatch = videoUrl.match(/dailymotion\.com\/(?:embed\/)?video\/([a-zA-Z0-9]+)/);
+  if (dmMatch) return `https://www.dailymotion.com/thumbnail/video/${dmMatch[1]}`;
+
+  // ScreenPal
+  const spMatch = videoUrl.match(/screenpal\.com\/(?:player|embed)\/([a-zA-Z0-9]+)/);
+  if (spMatch) return `https://go.screenpal.com/player/${spMatch[1]}/thumbnail.jpg`;
+
+  return "";
+}
+
 // ==========================================
 // API: List movies
 // ==========================================
@@ -93,13 +118,18 @@ async function addMovie(request, env) {
     return jsonResponse({ error: "Unauthorized" }, 401);
 
   const body = await request.json();
-  let { title, videoUrl, previewSec, thumbnail, type } = body;
+  let { title, videoUrl, thumbnail, type, previewSec } = body;
 
   if (!title || !videoUrl)
     return jsonResponse({ error: "Title & Video URL required" }, 400);
 
-  // 🎯 Auto extract src from iframe HTML
   videoUrl = extractSrc(videoUrl);
+
+  // Auto thumbnail if user didn't supply one
+  let finalThumb = thumbnail ? thumbnail.trim() : "";
+  if (!finalThumb) finalThumb = getAutoThumbnail(videoUrl);
+
+  const finalPreview = previewSec ? Math.max(1, parseInt(previewSec)) : 15;
 
   const listRaw = await env.MOVIES.get("movie_list");
   let list = listRaw ? JSON.parse(listRaw) : [];
@@ -108,9 +138,9 @@ async function addMovie(request, env) {
     id: crypto.randomUUID(),
     title: title.trim(),
     videoUrl: videoUrl.trim(),
-    previewSec: Math.max(1, parseInt(previewSec) || 10),
-    thumbnail: thumbnail ? thumbnail.trim() : "",
-    type: type || "iframe",
+    thumbnail: finalThumb,
+    previewSec: finalPreview,
+    type: type || "auto",
     createdAt: Date.now(),
   };
 
@@ -129,7 +159,7 @@ async function updateMovie(request, env) {
     return jsonResponse({ error: "Unauthorized" }, 401);
 
   const body = await request.json();
-  const { id, title, thumbnail, previewSec, type } = body;
+  const { id, title, thumbnail, type, previewSec } = body;
   let { videoUrl } = body;
   if (!id) return jsonResponse({ error: "ID required" }, 400);
 
@@ -139,10 +169,16 @@ async function updateMovie(request, env) {
   if (idx === -1) return jsonResponse({ error: "Not found" }, 404);
 
   if (title) list[idx].title = title.trim();
-  if (videoUrl) list[idx].videoUrl = extractSrc(videoUrl).trim();
-  if (previewSec) list[idx].previewSec = Math.max(1, parseInt(previewSec));
-  if (thumbnail !== undefined) list[idx].thumbnail = thumbnail.trim();
+  if (videoUrl) {
+    list[idx].videoUrl = extractSrc(videoUrl).trim();
+    if (thumbnail === undefined || thumbnail === "") {
+      const autoThumb = getAutoThumbnail(list[idx].videoUrl);
+      if (autoThumb) list[idx].thumbnail = autoThumb;
+    }
+  }
+  if (thumbnail !== undefined && thumbnail !== "") list[idx].thumbnail = thumbnail.trim();
   if (type) list[idx].type = type;
+  if (previewSec) list[idx].previewSec = Math.max(1, parseInt(previewSec));
 
   await env.MOVIES.put("movie_list", JSON.stringify(list));
   return jsonResponse({ success: true, movie: list[idx] });
@@ -200,7 +236,7 @@ function htmlPage(content) {
 }
 
 // ==========================================
-// HOME PAGE (Admin button hidden)
+// HOME PAGE
 // ==========================================
 function homePage() {
   return `<!DOCTYPE html>
@@ -253,7 +289,6 @@ function homePage() {
     font-size: 15px; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap;
   }
-  .card .info p { font-size: 12px; color: #888; margin-top: 4px; }
   .pagination {
     display: flex; justify-content: center; gap: 8px;
     margin-top: 40px; flex-wrap: wrap;
@@ -351,7 +386,7 @@ loadMovies(1);
 }
 
 // ==========================================
-// WATCH PAGE (Full video, no lock)
+// WATCH PAGE
 // ==========================================
 function watchPage(id) {
   return `<!DOCTYPE html>
@@ -411,7 +446,7 @@ async function load() {
 
   const isDirectVideo = /\\.(mp4|webm|ogg|m3u8)(\\?|$)/i.test(movieData.videoUrl);
 
-  if (movieData.type === 'video' && isDirectVideo) {
+  if (isDirectVideo) {
     const video = document.createElement('video');
     video.src = movieData.videoUrl;
     video.controls = true;
@@ -447,7 +482,7 @@ load();
 }
 
 // ==========================================
-// ADMIN PAGE
+// ADMIN PAGE (with live preview + thumbnail capture)
 // ==========================================
 function adminPage() {
   return `<!DOCTYPE html>
@@ -475,7 +510,7 @@ function adminPage() {
     border:1px solid #333; border-radius:6px; color:#eee; font-size:15px;
     font-family: inherit;
   }
-  textarea { resize: vertical; min-height: 80px; }
+  textarea { resize: vertical; min-height: 90px; font-family: monospace; font-size: 13px; }
   input:focus, select:focus, textarea:focus { outline:none; border-color:#ff0040; }
   button.primary {
     background:#ff0040; color:#fff; border:none; padding: 12px 24px;
@@ -483,6 +518,7 @@ function adminPage() {
     font-size: 15px;
   }
   button.primary:hover { opacity: 0.9; }
+  button.secondary { background:#444; }
   button.danger { background:#c00; }
   button.small { padding: 6px 12px; font-size: 12px; margin: 0; }
   .movie-item {
@@ -490,9 +526,12 @@ function adminPage() {
     padding: 12px; background:#111; border-radius:6px; margin-bottom:8px;
     gap: 12px; flex-wrap: wrap;
   }
-  .movie-item .info { flex:1; min-width: 200px; }
+  .movie-item .info { flex:1; min-width: 200px; display: flex; gap: 12px; align-items: center; }
+  .movie-item .thumb-mini {
+    width: 70px; height: 44px; border-radius: 4px; flex-shrink: 0;
+    background: #333 center/cover no-repeat;
+  }
   .movie-item .info h4 { font-size: 14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .movie-item .info p { font-size: 12px; color: #888; margin-top: 4px; }
   .actions { display:flex; gap:6px; }
   .msg { padding: 10px; border-radius:6px; margin-top: 12px; display:none; }
   .msg.show { display:block; }
@@ -501,12 +540,34 @@ function adminPage() {
   .hidden { display:none; }
   #loginCard { max-width: 400px; margin: 100px auto; }
   .hint { font-size: 12px; color:#666; margin-top: 4px; }
-  .tag {
-    display:inline-block; padding: 2px 8px; border-radius: 4px;
-    font-size: 10px; font-weight: 700; margin-left: 6px;
+
+  /* Preview player styles */
+  .preview-box {
+    margin-top: 16px; background: #000; border-radius: 8px;
+    overflow: hidden; aspect-ratio: 16/9;
+    display: none;
   }
-  .tag.iframe { background: #ff0040; color:#fff; }
-  .tag.video { background: #0080ff; color:#fff; }
+  .preview-box.show { display: block; }
+  .preview-box video, .preview-box iframe {
+    width: 100%; height: 100%; border: 0; display: block;
+  }
+  .capture-actions {
+    margin-top: 12px; display: none; gap: 10px; flex-wrap: wrap;
+  }
+  .capture-actions.show { display: flex; }
+  .thumb-preview {
+    margin-top: 12px; display: none;
+    padding: 12px; background: #111; border-radius: 6px;
+    align-items: center; gap: 12px;
+  }
+  .thumb-preview.show { display: flex; }
+  .thumb-preview img {
+    width: 160px; height: 90px; object-fit: cover;
+    border-radius: 4px; border: 2px solid #ff0040;
+  }
+  .thumb-preview .txt { font-size: 13px; color: #aaa; }
+  .thumb-preview .txt strong { color: #b6ffb6; display:block; }
+  .hidden-input { display: none; }
 </style>
 </head>
 <body>
@@ -516,6 +577,7 @@ function adminPage() {
 </header>
 <div class="wrap">
 
+  <!-- LOGIN -->
   <div id="loginCard" class="card">
     <h2>Admin Login</h2>
     <label>Password</label>
@@ -524,6 +586,7 @@ function adminPage() {
     <div id="loginMsg" class="msg"></div>
   </div>
 
+  <!-- ADMIN CONTENT -->
   <div id="adminContent" class="hidden">
     <div class="card">
       <h2 id="formTitle">➕ Add New Movie</h2>
@@ -532,25 +595,45 @@ function adminPage() {
       <label>Movie Title</label>
       <input type="text" id="title" placeholder="Enter movie name">
 
-      <label>Video Source Type</label>
-      <select id="type" onchange="updateHint()">
-        <option value="iframe">Iframe (YouTube / Dailymotion / Any Site)</option>
-        <option value="video">Direct Video (mp4 / m3u8 / webm)</option>
-      </select>
-      <p class="hint" id="urlHint">পেস্ট করতে পারো শুধু URL, অথবা পুরো &lt;iframe&gt; কোড</p>
-
       <label>Video URL / Embed Code</label>
-      <textarea id="videoUrl" placeholder='যেমন: &lt;iframe src="https://www.youtube.com/embed/xxxxx" ...&gt;&lt;/iframe&gt;'></textarea>
-      <p class="hint">✅ শুধু URL, অথবা পুরো iframe HTML — দুটোই কাজ করবে</p>
+      <textarea id="videoUrl" placeholder='Direct link: https://example.com/video.mp4  OR  ScreenPal embed code'>
+      </textarea>
+      <p class="hint">✅ Direct video link অথবা ScreenPal embed code — দুটোই কাজ করবে</p>
+
+      <!-- LIVE PREVIEW PLAYER -->
+      <div class="preview-box" id="previewBox"></div>
+
+      <!-- Capture actions (only for direct video) -->
+      <div class="capture-actions" id="captureActions">
+        <button class="primary" style="margin-top:0;background:#0080ff" onclick="captureThumb()">
+          📸 Set Current Frame as Thumbnail
+        </button>
+        <button class="primary secondary" style="margin-top:0" onclick="clearPreview()">
+          ✖ Close Preview
+        </button>
+      </div>
+
+      <!-- ScreenPal/iframe hint -->
+      <div class="msg show" id="iframeHint" style="display:none; background:#2a2a0f; color:#ffdf80;">
+        ℹ️ Embed video থেকে thumbnail capture করা যায় না (browser security)। Auto thumbnail ব্যবহৃত হবে অথবা নিচে manually URL দিন।
+      </div>
 
       <label>Thumbnail URL (optional)</label>
-      <input type="text" id="thumbnail" placeholder="https://example.com/thumb.jpg">
+      <input type="text" id="thumbnail" placeholder="খালি রাখলে auto video থেকে নেবে">
+
+      <!-- Thumbnail preview -->
+      <div class="thumb-preview" id="thumbPreviewBox">
+        <img id="thumbPreviewImg" src="" alt="thumbnail">
+        <div class="txt">
+          <strong>✓ Thumbnail set</strong>
+          এই ছবিটাই home page এ দেখাবে
+        </div>
+      </div>
 
       <label>Preview Duration (seconds)</label>
       <select id="previewSec">
-        <option value="5">5 seconds</option>
-        <option value="10" selected>10 seconds</option>
-        <option value="15">15 seconds</option>
+        <option value="10">10 seconds</option>
+        <option value="15" selected>15 seconds</option>
         <option value="20">20 seconds</option>
         <option value="30">30 seconds</option>
         <option value="45">45 seconds</option>
@@ -558,7 +641,7 @@ function adminPage() {
       </select>
 
       <button class="primary" id="submitBtn" onclick="submitMovie()">Add Movie</button>
-      <button class="primary" style="background:#333" onclick="resetForm()" id="cancelBtn" type="button">Cancel</button>
+      <button class="primary secondary" onclick="resetForm()" id="cancelBtn" type="button">Cancel</button>
       <div id="addMsg" class="msg"></div>
     </div>
 
@@ -575,10 +658,21 @@ function adminPage() {
 
 <script>
 let token = localStorage.getItem('admin_token') || '';
+let capturedThumbnail = ''; // Base64 captured thumbnail
 
 window.addEventListener('DOMContentLoaded', () => {
   if (token) verifyToken().then(ok => { if (ok) showAdmin(); });
+  // Auto-preview when videoUrl changes
+  document.getElementById('videoUrl').addEventListener('input', debounce(loadPreview, 800));
+  document.getElementById('thumbnail').addEventListener('input', (e) => {
+    if (e.target.value.trim()) showThumbPreview(e.target.value.trim());
+  });
 });
+
+function debounce(fn, ms) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
 
 async function verifyToken() {
   const r = await fetch('/api/check-auth', { headers: { 'X-Admin-Password': token } });
@@ -615,17 +709,109 @@ function logout() {
   location.reload();
 }
 
-function updateHint() {
-  const t = document.getElementById('type').value;
-  const hint = document.getElementById('urlHint');
-  const input = document.getElementById('videoUrl');
-  if (t === 'iframe') {
-    hint.textContent = '✅ শুধু URL, অথবা পুরো iframe HTML — দুটোই কাজ করবে';
-    input.placeholder = 'যেমন: <iframe src="https://www.youtube.com/embed/xxxxx" ...></iframe>';
+// ==========================================
+// LIVE PREVIEW
+// ==========================================
+let currentPreviewType = null;
+
+function loadPreview() {
+  const raw = document.getElementById('videoUrl').value.trim();
+  const box = document.getElementById('previewBox');
+  const actions = document.getElementById('captureActions');
+  const iframeHint = document.getElementById('iframeHint');
+
+  box.innerHTML = '';
+  box.classList.remove('show');
+  actions.classList.remove('show');
+  iframeHint.style.display = 'none';
+  currentPreviewType = null;
+
+  if (!raw) return;
+
+  // Extract src
+  let src = raw;
+  const iframeMatch = raw.match(/<iframe[^>]*\ssrc\s*=\s*["']([^"']+)["']/i);
+  if (iframeMatch) src = iframeMatch[1];
+
+  // If it's a simple URL, use as is
+  if (!/^https?:\/\//i.test(src)) return;
+
+  const isDirect = /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(src);
+
+  if (isDirect) {
+    // Direct video -> use <video> for capture
+    const video = document.createElement('video');
+    video.src = src;
+    video.controls = true;
+    video.playsInline = true;
+    video.crossOrigin = 'anonymous';
+    video.muted = true; // allow autoplay
+    box.appendChild(video);
+    box.classList.add('show');
+    actions.classList.add('show');
+    currentPreviewType = 'video';
   } else {
-    hint.textContent = 'যেমন: https://example.com/video.mp4';
-    input.placeholder = 'https://example.com/video.mp4';
+    // Iframe -> no capture
+    const iframe = document.createElement('iframe');
+    iframe.src = src;
+    iframe.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen';
+    iframe.allowFullscreen = true;
+    box.appendChild(iframe);
+    box.classList.add('show');
+    iframeHint.style.display = 'block';
+    currentPreviewType = 'iframe';
+
+    // Auto set from auto-thumbnail if empty
+    const autoThumb = getAutoThumb(src);
+    const thumbInput = document.getElementById('thumbnail');
+    if (autoThumb && !thumbInput.value.trim()) {
+      showThumbPreview(autoThumb);
+    }
   }
+}
+
+function getAutoThumb(url) {
+  const spMatch = url.match(/screenpal\.com\/(?:player|embed)\/([a-zA-Z0-9]+)/);
+  if (spMatch) return `https://go.screenpal.com/player/${spMatch[1]}/thumbnail.jpg`;
+  const ytMatch = url.match(/(?:youtube\.com\/(?:embed\/|watch\?v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  if (ytMatch) return `https://img.youtube.com/vi/${ytMatch[1]}/maxresdefault.jpg`;
+  return '';
+}
+
+// ==========================================
+// CAPTURE FRAME
+// ==========================================
+function captureThumb() {
+  const video = document.querySelector('#previewBox video');
+  if (!video) return alert('No video loaded');
+
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 360;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+
+    capturedThumbnail = dataUrl;
+    showThumbPreview(dataUrl);
+    alert('✅ Thumbnail captured at ' + video.currentTime.toFixed(1) + 's');
+  } catch (err) {
+    alert('❌ Capture failed (cross-origin video): ' + err.message + '\\n\\nTip: manually give a thumbnail URL');
+  }
+}
+
+function clearPreview() {
+  document.getElementById('previewBox').innerHTML = '';
+  document.getElementById('previewBox').classList.remove('show');
+  document.getElementById('captureActions').classList.remove('show');
+}
+
+function showThumbPreview(url) {
+  const box = document.getElementById('thumbPreviewBox');
+  const img = document.getElementById('thumbPreviewImg');
+  img.src = url;
+  box.classList.add('show');
 }
 
 function resetForm() {
@@ -633,21 +819,24 @@ function resetForm() {
   document.getElementById('title').value = '';
   document.getElementById('videoUrl').value = '';
   document.getElementById('thumbnail').value = '';
-  document.getElementById('previewSec').value = '10';
-  document.getElementById('type').value = 'iframe';
+  document.getElementById('previewSec').value = '15';
   document.getElementById('formTitle').textContent = '➕ Add New Movie';
   document.getElementById('submitBtn').textContent = 'Add Movie';
   document.getElementById('cancelBtn').classList.add('hidden');
-  updateHint();
+  capturedThumbnail = '';
+  clearPreview();
+  document.getElementById('thumbPreviewBox').classList.remove('show');
 }
 
+// ==========================================
+// SUBMIT
+// ==========================================
 async function submitMovie() {
   const editId = document.getElementById('editId').value;
   const title = document.getElementById('title').value.trim();
   const videoUrl = document.getElementById('videoUrl').value.trim();
-  const thumbnail = document.getElementById('thumbnail').value.trim();
+  let thumbnail = document.getElementById('thumbnail').value.trim();
   const previewSec = document.getElementById('previewSec').value;
-  const type = document.getElementById('type').value;
   const msg = document.getElementById('addMsg');
 
   if (!title || !videoUrl) {
@@ -656,8 +845,11 @@ async function submitMovie() {
     return;
   }
 
+  // If captured thumbnail exists, use it
+  if (capturedThumbnail) thumbnail = capturedThumbnail;
+
   const url = editId ? '/api/movies/update' : '/api/movies';
-  const payload = { title, videoUrl, thumbnail, previewSec, type };
+  const payload = { title, videoUrl, thumbnail, previewSec, type: 'auto' };
   if (editId) payload.id = editId;
 
   const r = await fetch(url, {
@@ -681,6 +873,9 @@ async function submitMovie() {
   }
 }
 
+// ==========================================
+// LIST
+// ==========================================
 async function loadList() {
   const all = [];
   let page = 1;
@@ -696,18 +891,23 @@ async function loadList() {
     el.innerHTML = '<p style="color:#666">কোনো মুভি নেই</p>';
     return;
   }
-  el.innerHTML = all.map(m => \`
+  el.innerHTML = all.map(m => {
+    const thumbStyle = m.thumbnail ? \`background-image:url('\${m.thumbnail}')\` : '';
+    return \`
     <div class="movie-item">
       <div class="info">
-        <h4>\${escapeHtml(m.title)}<span class="tag \${m.type === 'iframe' ? 'iframe' : 'video'}">\${(m.type || 'iframe').toUpperCase()}</span></h4>
-        <p>⏱ Preview: \${m.previewSec}s</p>
+        <div class="thumb-mini" style="\${thumbStyle}"></div>
+        <div>
+          <h4>\${escapeHtml(m.title)}</h4>
+        </div>
       </div>
       <div class="actions">
         <button class="primary small" onclick='editMovie("\${m.id}")'>Edit</button>
         <button class="primary small danger" onclick='delMovie("\${m.id}")'>Delete</button>
       </div>
     </div>
-  \`).join('');
+    \`;
+  }).join('');
 }
 
 async function editMovie(id) {
@@ -726,12 +926,13 @@ async function editMovie(id) {
   document.getElementById('title').value = m.title;
   document.getElementById('videoUrl').value = m.videoUrl;
   document.getElementById('thumbnail').value = m.thumbnail || '';
-  document.getElementById('previewSec').value = m.previewSec;
-  document.getElementById('type').value = m.type || 'iframe';
+  document.getElementById('previewSec').value = m.previewSec || 15;
   document.getElementById('formTitle').textContent = '✏️ Edit Movie';
   document.getElementById('submitBtn').textContent = 'Update Movie';
   document.getElementById('cancelBtn').classList.remove('hidden');
-  updateHint();
+  capturedThumbnail = '';
+  if (m.thumbnail) showThumbPreview(m.thumbnail);
+  loadPreview();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
