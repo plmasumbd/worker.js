@@ -17,6 +17,9 @@ export default {
     
     // নতুন রুট: অটো ফেচ বা স্ক্র্যাপিং এর জন্য
     if (p === "/api/fetch-source" && request.method === "POST") return fetchSourceData(request);
+    
+    // নতুন রুট: Smart Link (r.jina.ai এর মাধ্যমে)
+    if (p === "/api/smart-link" && request.method === "POST") return smartLinkFetch(request);
 
     if (p === "/") return html(homePage());
     if (p === "/admin") return html(adminPage());
@@ -26,14 +29,62 @@ export default {
   }
 };
 
-// ================= AUTO FETCH / SCRAPER =================
+// ================= NEW SMART LINK FETCH (r.jina.ai) =================
+async function smartLinkFetch(request) {
+  try {
+    const body = await request.json();
+    const targetUrl = body.url;
+    if (!targetUrl) return json({ error: "URL required" }, 400);
+
+    // r.jina.ai ব্যবহার করে ওয়েবসাইটের কন্টেন্ট টেক্সট আকারে আনা
+    const res = await fetch("https://r.jina.ai/" + targetUrl, {
+      headers: {
+        "Accept": "text/plain",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+      }
+    });
+    
+    if (!res.ok) return json({ error: "Failed to fetch from Jina. Status: " + res.status }, 400);
+    const textContent = await res.text();
+
+    const getMatch = (regex) => {
+      const match = textContent.match(regex);
+      return match ? match[1] : "";
+    };
+
+    // Jina থেকে আসা টেক্সট থেকে ডাটা খোঁজা
+    const video_title = getMatch(/video_title:\s*'([^']+)'/);
+    const video_id = getMatch(/video_id:\s*'([^']+)'/);
+    const preview_url = getMatch(/preview_url:\s*'([^']+)'/) || getMatch(/preview_url1:\s*'([^']+)'/);
+    const video_alt_url = getMatch(/video_alt_url:\s*'([^']+)'/);
+    const video_url = video_alt_url || getMatch(/video_url:\s*'([^']+)'/);
+
+    if(!video_url) {
+       return json({ error: "Could not find video link in the fetched content." }, 400);
+    }
+
+    return json({
+      success: true,
+      data: {
+        title: video_title,
+        id: video_id,
+        thumbnail: preview_url,
+        videoUrl: video_url
+      }
+    });
+
+  } catch (err) {
+    return json({ error: "Smart Link failed: " + err.message }, 500);
+  }
+}
+
+// ================= AUTO FETCH / SCRAPER (Direct) =================
 async function fetchSourceData(request) {
   try {
     const body = await request.json();
     const targetUrl = body.url;
     if (!targetUrl) return json({ error: "URL required" }, 400);
 
-    // ওয়েবসাইট থেকে HTML লোড করা (বট ডিটেকশন এড়াতে User-Agent দেওয়া হয়েছে)
     const res = await fetch(targetUrl, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
@@ -45,20 +96,14 @@ async function fetchSourceData(request) {
     if (!res.ok) return json({ error: "Failed to load URL. Status: " + res.status }, 400);
     const htmlText = await res.text();
 
-    // রেগুলার এক্সপ্রেশন দিয়ে ডাটা খোঁজার ফাংশন (সিঙ্গেল কোটেশন ' এর জন্য)
     const getMatch = (regex) => {
       const match = htmlText.match(regex);
       return match ? match[1] : "";
     };
 
-    // আপনার স্ক্রিনশট অনুযায়ী সঠিক প্যাটার্ন
     const video_title = getMatch(/video_title:\s*'([^']+)'/);
     const video_id = getMatch(/video_id:\s*'([^']+)'/);
-    
-    // থাম্বনেইল (preview_url বা preview_url1)
     const preview_url = getMatch(/preview_url:\s*'([^']+)'/) || getMatch(/preview_url1:\s*'([^']+)'/);
-    
-    // ভিডিও লিংক (video_alt_url আগে চেক করবে, না পেলে video_url)
     const video_alt_url = getMatch(/video_alt_url:\s*'([^']+)'/);
     const video_url = video_alt_url || getMatch(/video_url:\s*'([^']+)'/);
 
@@ -136,7 +181,6 @@ async function addMovie(request, env) {
     createdAt: Date.now()
   };
   
-  // ডুপ্লিকেট চেক (যদি স্ক্র্যাপ করা video_id আগে থেকেই থাকে)
   if (b.videoId && list.find(m => m.id === b.videoId)) {
      return json({ error: "This video is already added!" }, 400);
   }
@@ -480,8 +524,9 @@ function adminPage() {
   parts.push('.tabs{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}');
   parts.push('.tabs button{padding:10px 20px;background:#1c1c1c;color:#eee;border:1px solid #333;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600}');
   parts.push('.tabs button.active{background:#ff0040;border-color:#ff0040}');
-  parts.push('.auto-box{background:#2a2a2a;border:1px dashed #ff9800;padding:15px;border-radius:8px;margin-bottom:20px}');
+  parts.push('.auto-box{background:#2a2a2a;border:1px dashed #ff0040;padding:15px;border-radius:8px;margin-bottom:20px}');
   parts.push('.paste-box{background:#1a2a3a;border:1px dashed #00c853;padding:15px;border-radius:8px;margin-bottom:20px}');
+  parts.push('.smart-box{background:#2a1a3a;border:1px dashed #9c27b0;padding:15px;border-radius:8px;margin-bottom:20px}');
   parts.push('</style></head><body>');
   parts.push('<header><h1>Admin Panel</h1><a href="/">Home</a></header>');
   parts.push('<div class="wrap">');
@@ -502,25 +547,34 @@ function adminPage() {
   
   parts.push('<div id="tm">');
   
-  // ১. অটো ফেচ (URL থেকে)
+  // ১. Smart Link (r.jina.ai)
+  parts.push('<div class="card smart-box">');
+  parts.push('<h2 style="color:#9c27b0;margin-bottom:10px;">🔗 Smart Link (Bot Bypass)</h2>');
+  parts.push('<p class="hint" style="margin-bottom:10px;color:#e1bee7;">সরাসরি ভিডিও পেজের লিংক দিন। এটি বট ব্লক বাইপাস করে ডাটা আনবে।</p>');
+  parts.push('<input type="text" id="smartUrl" placeholder="https://letsjerk.com/video-page">');
+  parts.push('<button class="primary" style="background:#9c27b0; margin-top:10px;" id="smartBtn">Smart Extract</button>');
+  parts.push('<div id="smrtm" class="msg" style="margin-top:10px;"></div>');
+  parts.push('</div>');
+
+  // ২. স্মার্ট পেস্ট (সোর্স কোড থেকে)
+  parts.push('<div class="card paste-box">');
+  parts.push('<h2 style="color:#00c853;margin-bottom:10px;">📋 Smart Paste (Manual Source Code)</h2>');
+  parts.push('<p class="hint" style="margin-bottom:10px;color:#aaddff;">পেজটি নিজে ওপেন করুন -> View Source করুন -> নিচের লাইনগুলো কপি করে এখানে পেস্ট করুন।</p>');
+  parts.push('<textarea id="sourceCode" placeholder="video_title: \'Example Title\',&#10;video_id: \'1234\',&#10;preview_url: \'https://image.jpg\',&#10;video_alt_url: \'https://video.mp4\'" style="min-height:120px;"></textarea>');
+  parts.push('<button class="primary" style="background:#00c853; margin-top:10px;" id="parseBtn">Extract & Fill Data</button>');
+  parts.push('<div id="pm" class="msg" style="margin-top:10px;"></div>');
+  parts.push('</div>');
+
+  // ৩. অটো ফেচ (Direct - Bot Blocked?)
   parts.push('<div class="card auto-box">');
-  parts.push('<h2 style="color:#fff;margin-bottom:10px;">⚡ Auto Fetch from URL (Bot Blocked?)</h2>');
+  parts.push('<h2 style="color:#fff;margin-bottom:10px;">⚡ Auto Fetch (Direct)</h2>');
   parts.push('<p class="hint" style="margin-bottom:10px;">সরাসরি সাইটের লিংক দিলে বট ব্লকের কারণে কাজ না করতে পারে।</p>');
   parts.push('<input type="text" id="scrapeUrl" placeholder="https://example.com/video-page">');
   parts.push('<button class="primary" style="background:#ff9800; margin-top:10px;" id="scrapeBtn">Try Auto Fetch</button>');
   parts.push('<div id="sm" class="msg" style="margin-top:10px;"></div>');
   parts.push('</div>');
 
-  // ২. স্মার্ট পেস্ট (সোর্স কোড থেকে)
-  parts.push('<div class="card paste-box">');
-  parts.push('<h2 style="color:#00c853;margin-bottom:10px;">📋 Smart Paste (Manual Source Code)</h2>');
-  parts.push('<p class="hint" style="margin-bottom:10px;color:#aaddff;">পেজটি নিজে ওপেন করুন -> View Source করুন -> নিচের লাইনগুলো কপি করে এখানে পেস্ট করুন। কোড নিজেই ডাটা আলাদা করে ফেলবে।</p>');
-  parts.push('<textarea id="sourceCode" placeholder="video_title: \'Example Title\',&#10;video_id: \'1234\',&#10;preview_url: \'https://image.jpg\',&#10;video_alt_url: \'https://video.mp4\'" style="min-height:120px;"></textarea>');
-  parts.push('<button class="primary" style="background:#00c853; margin-top:10px;" id="parseBtn">Extract & Fill Data</button>');
-  parts.push('<div id="pm" class="msg" style="margin-top:10px;"></div>');
-  parts.push('</div>');
-
-  // ৩. ম্যানুয়াল ফর্ম
+  // ৪. ম্যানুয়াল ফর্ম
   parts.push('<div class="card">');
   parts.push('<h2 id="ft">Add / Edit Movie</h2>');
   parts.push('<input type="hidden" id="eid">');
@@ -564,7 +618,8 @@ function adminPage() {
   parts.push('  $("logoutBtn").onclick=logout;');
   parts.push('  $("adsSaveBtn").onclick=saveAds;');
   parts.push('  $("scrapeBtn").onclick=autoFetch;');
-  parts.push('  $("parseBtn").onclick=parseSourceCode;'); // নতুন পেস্ট বাটন
+  parts.push('  $("parseBtn").onclick=parseSourceCode;');
+  parts.push('  $("smartBtn").onclick=smartLinkExtract;'); // নতুন স্মার্ট বাটন
   parts.push('  document.querySelectorAll("[data-tab]").forEach(function(b){');
   parts.push('    b.onclick=function(){tab(b.getAttribute("data-tab"))};');
   parts.push('  });');
@@ -617,7 +672,27 @@ function adminPage() {
   parts.push('  $("cb").classList.add("hidden");');
   parts.push('}');
 
-  // URL অটো ফেচ ফাংশন
+  // ১. Smart Link Extract ফাংশন
+  parts.push('async function smartLinkExtract(){');
+  parts.push('  var url=$("smartUrl").value.trim();');
+  parts.push('  var m=$("smrtm");');
+  parts.push('  if(!url){m.textContent="URL required";m.className="msg err show";return}');
+  parts.push('  m.textContent="Extracting via Smart Link... Please wait...";m.className="msg show";m.style.color="#fff";');
+  parts.push('  try{');
+  parts.push('    var r=await fetch("/api/smart-link",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:url})});');
+  parts.push('    var d=await r.json();');
+  parts.push('    if(r.ok && d.success){');
+  parts.push('      fillForm(d.data);');
+  parts.push('      m.textContent="Smart Extract successful!";m.className="msg ok show";');
+  parts.push('      m.style.color="#b6ffb6";');
+  parts.push('    }else{');
+  parts.push('      m.textContent=d.error || "Failed to extract data.";m.className="msg err show";');
+  parts.push('      m.style.color="#ffb6b6";');
+  parts.push('    }');
+  parts.push('  }catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}');
+  parts.push('}');
+
+  // ২. URL অটো ফেচ ফাংশন
   parts.push('async function autoFetch(){');
   parts.push('  var url=$("scrapeUrl").value.trim();');
   parts.push('  var m=$("sm");');
@@ -631,13 +706,13 @@ function adminPage() {
   parts.push('      m.textContent="Data fetched successfully!";m.className="msg ok show";');
   parts.push('      m.style.color="#b6ffb6";');
   parts.push('    }else{');
-  parts.push('      m.textContent=d.error || "Failed to fetch data. Site might block it.";m.className="msg err show";');
+  parts.push('      m.textContent=d.error || "Failed to fetch data.";m.className="msg err show";');
   parts.push('      m.style.color="#ffb6b6";');
   parts.push('    }');
   parts.push('  }catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}');
   parts.push('}');
 
-  // সোর্স কোড থেকে ডাটা এক্সট্রাক্ট করার ফাংশন (Smart Paste)
+  // ৩. সোর্স কোড থেকে ডাটা এক্সট্রাক্ট করার ফাংশন (Smart Paste)
   parts.push('function parseSourceCode(){');
   parts.push('  var text = $("sourceCode").value;');
   parts.push('  var m = $("pm");');
