@@ -15,7 +15,6 @@ export default {
     if (p === "/api/ads" && request.method === "GET") return getAds(env);
     if (p === "/api/ads" && request.method === "POST") return saveAds(request, env);
     
-    // নতুন রুট: অটো ফেচ বা স্ক্র্যাপিং এর জন্য
     if (p === "/api/fetch-source" && request.method === "POST") return fetchSourceData(request);
 
     if (p === "/") return html(homePage());
@@ -58,7 +57,7 @@ async function fetchSourceData(request) {
       isBlocked = true;
     }
 
-    // ২. যদি ব্লক থাকে, তবে r.jina.ai ব্যবহার করে সোর্স কোড আনা (বট বাইপাস)
+    // ২. যদি ব্লক থাকে, তবে r.jina.ai ব্যবহার করে সোর্স কোড আনা
     if (isBlocked) {
       try {
         const jinaRes = await fetch("https://r.jina.ai/" + targetUrl, {
@@ -74,19 +73,28 @@ async function fetchSourceData(request) {
       return json({ error: "Failed to load page source." }, 400);
     }
 
-    const getMatch = (regex) => {
-      const match = htmlText.match(regex);
-      return match ? match[1] : "";
+    // রেগুলার এক্সপ্রেশন: সিঙ্গেল ('), ডাবল (") এবং স্পেস হ্যান্ডেল করবে
+    const getMatch = (key) => {
+      // প্যাটার্ন ১: video_title: 'Example' অথবা video_title: "Example"
+      let regex = new RegExp(key + "\\s*:\\s*['\"]([^'\"]+)['\"]", "i");
+      let match = htmlText.match(regex);
+      if (match) return match[1];
+
+      // প্যাটার্ন ২: যদি JSON ফরম্যাটে থাকে (Jina এর ক্ষেত্রে)
+      regex = new RegExp('"' + key + '"\\s*:\\s*"([^"]+)"', "i");
+      match = htmlText.match(regex);
+      if (match) return match[1];
+      
+      return "";
     };
 
-    const video_title = getMatch(/video_title:\s*'([^']+)'/);
-    const video_id = getMatch(/video_id:\s*'([^']+)'/);
-    const preview_url = getMatch(/preview_url:\s*'([^']+)'/) || getMatch(/preview_url1:\s*'([^']+)'/);
-    const video_alt_url = getMatch(/video_alt_url:\s*'([^']+)'/);
-    const video_url = video_alt_url || getMatch(/video_url:\s*'([^']+)'/);
+    const video_title = getMatch('video_title');
+    const video_id = getMatch('video_id');
+    let preview_url = getMatch('preview_url') || getMatch('preview_url1');
+    let video_url = getMatch('video_alt_url') || getMatch('video_url');
 
     if(!video_url) {
-       return json({ error: "Could not find video link. The site might be blocking scrapers." }, 400);
+       return json({ error: "Could not find video link. The site might be blocking scrapers or format changed." }, 400);
     }
 
     return json({
@@ -504,8 +512,6 @@ function adminPage() {
   parts.push('.tabs button.active{background:#ff0040;border-color:#ff0040}');
   parts.push('.auto-box{background:#2a2a2a;border:1px dashed #ff9800;padding:15px;border-radius:8px;margin-bottom:20px}');
   parts.push('.paste-box{background:#1a2a3a;border:1px dashed #00c853;padding:15px;border-radius:8px;margin-bottom:20px}');
-  parts.push('.preview-box{background:#000;border:1px solid #333;height:300px;border-radius:8px;margin-top:15px;overflow:hidden;position:relative;display:none;}');
-  parts.push('.preview-box iframe{width:100%;height:100%;border:0;}');
   parts.push('</style></head><body>');
   parts.push('<header><h1>Admin Panel</h1><a href="/">Home</a></header>');
   parts.push('<div class="wrap">');
@@ -526,15 +532,17 @@ function adminPage() {
   
   parts.push('<div id="tm">');
   
-  // ১. অটো ফেচ (URL থেকে) - লাইভ প্রিভিউ সহ
+  // ১. অটো ফেচ (URL থেকে)
   parts.push('<div class="card auto-box">');
-  parts.push('<h2 style="color:#fff;margin-bottom:10px;">⚡ Auto Fetch (Live Preview)</h2>');
-  parts.push('<p class="hint" style="margin-bottom:10px;">লিংক দিলে নিচে পেজটি লাইভ ওপেন হবে এবং কোড নিজেই ডাটা বের করবে।</p>');
+  parts.push('<h2 style="color:#fff;margin-bottom:10px;">⚡ Auto Extract from URL</h2>');
+  parts.push('<p class="hint" style="margin-bottom:10px;">লিংক দিন এবং ডাটা এক্সট্রাক্ট করুন। (নিচে পেজটি ওপেন করার বাটনও পাবেন)</p>');
   parts.push('<input type="text" id="scrapeUrl" placeholder="https://example.com/video-page">');
-  parts.push('<button class="primary" style="background:#ff9800; margin-top:10px;" id="scrapeBtn">Open & Extract</button>');
+  parts.push('<div style="display:flex; gap:10px; flex-wrap:wrap;">');
+  parts.push('  <button class="primary" style="background:#ff9800; margin-top:10px;" id="scrapeBtn">Extract Data</button>');
+  // নতুন লাইভ ওপেন বাটন (নতুন ট্যাবে)
+  parts.push('  <button class="primary" style="background:#2196F3; margin-top:10px;" id="openLiveBtn">🔗 Open Page Live</button>');
+  parts.push('</div>');
   parts.push('<div id="sm" class="msg" style="margin-top:10px;"></div>');
-  // লাইভ প্রিভিউ আইফ্রেম
-  parts.push('<div id="livePreview" class="preview-box"><iframe id="previewFrame"></iframe></div>');
   parts.push('</div>');
 
   // ২. স্মার্ট পেস্ট (সোর্স কোড থেকে)
@@ -589,7 +597,8 @@ function adminPage() {
   parts.push('  $("cb").onclick=reset;');
   parts.push('  $("logoutBtn").onclick=logout;');
   parts.push('  $("adsSaveBtn").onclick=saveAds;');
-  parts.push('  $("scrapeBtn").onclick=autoFetchWithPreview;'); // নতুন ফাংশন
+  parts.push('  $("scrapeBtn").onclick=autoFetch;');
+  parts.push('  $("openLiveBtn").onclick=openLivePage;'); // নতুন লাইভ বাটন
   parts.push('  $("parseBtn").onclick=parseSourceCode;');
   parts.push('  document.querySelectorAll("[data-tab]").forEach(function(b){');
   parts.push('    b.onclick=function(){tab(b.getAttribute("data-tab"))};');
@@ -643,21 +652,20 @@ function adminPage() {
   parts.push('  $("cb").classList.add("hidden");');
   parts.push('}');
 
-  // নতুন ফাংশন: লাইভ প্রিভিউ সহ অটো ফেচ
-  parts.push('async function autoFetchWithPreview(){');
+  // নতুন ফাংশন: পেজটি নতুন ট্যাবে ওপেন করা
+  parts.push('function openLivePage(){');
   parts.push('  var url=$("scrapeUrl").value.trim();');
   parts.push('  var m=$("sm");');
-  parts.push('  var previewBox = $("livePreview");');
-  parts.push('  var frame = $("previewFrame");');
-  
   parts.push('  if(!url){m.textContent="URL required";m.className="msg err show";return}');
-  
-  // ১. লাইভ প্রিভিউ দেখানো
-  parts.push('  previewBox.style.display="block";');
-  parts.push('  frame.src = url;');
-  
-  // ২. ব্যাকগ্রাউন্ডে ডাটা এক্সট্রাক্ট করা
-  parts.push('  m.textContent="Page opening... Extracting data in background...";m.className="msg show";m.style.color="#fff";');
+  parts.push('  window.open(url, "_blank");');
+  parts.push('}');
+
+  // URL অটো ফেচ ফাংশন
+  parts.push('async function autoFetch(){');
+  parts.push('  var url=$("scrapeUrl").value.trim();');
+  parts.push('  var m=$("sm");');
+  parts.push('  if(!url){m.textContent="URL required";m.className="msg err show";return}');
+  parts.push('  m.textContent="Fetching data... Please wait...";m.className="msg show";m.style.color="#fff";');
   parts.push('  try{');
   parts.push('    var r=await fetch("/api/fetch-source",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:url})});');
   parts.push('    var d=await r.json();');
@@ -666,7 +674,7 @@ function adminPage() {
   parts.push('      m.textContent="Data fetched successfully!";m.className="msg ok show";');
   parts.push('      m.style.color="#b6ffb6";');
   parts.push('    }else{');
-  parts.push('      m.textContent=d.error || "Failed to fetch data. Site might block it.";m.className="msg err show";');
+  parts.push('      m.textContent=d.error || "Failed to fetch data. Try Smart Paste below.";m.className="msg err show";');
   parts.push('      m.style.color="#ffb6b6";');
   parts.push('    }');
   parts.push('  }catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}');
@@ -678,15 +686,19 @@ function adminPage() {
   parts.push('  var m = $("pm");');
   parts.push('  if(!text){m.textContent="Please paste source code";m.className="msg err show";return}');
   
-  parts.push('  var getMatch = function(regex) {');
+  parts.push('  var getMatch = function(key) {');
+  parts.push('    var regex = new RegExp(key + "\\\\s*:\\\\s*[\'\\"]([^\'\\"]+)[\'\\"]", "i");');
   parts.push('    var match = text.match(regex);');
+  parts.push('    if (match) return match[1];');
+  parts.push('    regex = new RegExp(\'"\' + key + \'"\\\\s*:\\\\s*"([^"]+)"\', "i");');
+  parts.push('    match = text.match(regex);');
   parts.push('    return match ? match[1] : "";');
   parts.push('  };');
   
-  parts.push('  var title = getMatch(/video_title:\\s*\'([^\']+)\'/);');
-  parts.push('  var vid = getMatch(/video_id:\\s*\'([^\']+)\'/);');
-  parts.push('  var img = getMatch(/preview_url:\\s*\'([^\']+)\'/) || getMatch(/preview_url1:\\s*\'([^\']+)\'/);');
-  parts.push('  var vurl = getMatch(/video_alt_url:\\s*\'([^\']+)\'/) || getMatch(/video_url:\\s*\'([^\']+)\'/);');
+  parts.push('  var title = getMatch(\'video_title\');');
+  parts.push('  var vid = getMatch(\'video_id\');');
+  parts.push('  var img = getMatch(\'preview_url\') || getMatch(\'preview_url1\');');
+  parts.push('  var vurl = getMatch(\'video_alt_url\') || getMatch(\'video_url\');');
   
   parts.push('  if(vurl){');
   parts.push('    fillForm({title: title, id: vid, thumbnail: img, videoUrl: vurl});');
