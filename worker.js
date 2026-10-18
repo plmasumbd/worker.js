@@ -26,9 +26,12 @@ export default {
 function extractSrc(input) {
   if (!input) return "";
   const s = input.trim();
+  // iframe থেকে src বের করা
   const m1 = s.match(/<iframe[^>]*\ssrc\s*=\s*["']([^"']+)["']/i);
   if (m1) return m1[1];
+  // সরাসরি URL হলে
   if (/^https?:\/\/\S+$/i.test(s)) return s;
+  // টেক্সটের ভেতর থেকে URL খোঁজা
   const m2 = s.match(/https?:\/\/[^\s"'<>]+/i);
   if (m2) return m2[0];
   return s;
@@ -287,7 +290,7 @@ function watchPage(id) {
   parts.push('header h1{color:#ff0040;font-size:22px}');
   parts.push('header a{color:#eee;text-decoration:none;padding:8px 14px;background:#ff0040;border-radius:6px;font-size:14px}');
   parts.push('.wrap{max-width:1000px;margin:30px auto;padding:0 20px}');
-  parts.push('.player{width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden}');
+  parts.push('.player{width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden;position:relative}');
   parts.push('.player iframe,.player video{width:100%;height:100%;border:0;display:block}');
   parts.push('.title{margin-top:20px;font-size:22px;font-weight:700}');
   parts.push('.ad{margin:20px 0;text-align:center;overflow:hidden}');
@@ -330,16 +333,21 @@ parts.push('}');
   parts.push('  if(!mv){document.getElementById("t").textContent="Not found";return}');
   parts.push('  document.getElementById("t").textContent=mv.title;');
   parts.push('  var pb=document.getElementById("pb");');
+  
+  // ডাইরেক্ট ভিডিও ফাইল চেক করা
   parts.push('  var direct=/\\.(mp4|webm|ogg|m3u8)(\\?|$)/i.test(mv.videoUrl);');
   parts.push('  if(direct){');
   parts.push('    var v=document.createElement("video");');
   parts.push('    v.src=mv.videoUrl;v.controls=true;v.autoplay=true;v.playsInline=true;');
   parts.push('    pb.appendChild(v);');
   parts.push('  }else{');
+  // ফুল স্ক্রিন এবং অটোপ্লে পারমিশন আরও শক্তিশালী করা হয়েছে
   parts.push('    var f=document.createElement("iframe");');
   parts.push('    f.src=mv.videoUrl;');
-  parts.push('    f.allow="autoplay;encrypted-media;picture-in-picture;fullscreen";');
-  parts.push('    f.allowFullscreen=true;');
+  parts.push('    f.setAttribute("allow", "autoplay; fullscreen; encrypted-media; picture-in-picture; web-share; clipboard-write;");');
+  parts.push('    f.setAttribute("allowFullscreen", "true");');
+  parts.push('    f.setAttribute("webkitallowfullscreen", "true");');
+  parts.push('    f.setAttribute("mozallowfullscreen", "true");');
   parts.push('    f.referrerPolicy="no-referrer";');
   parts.push('    pb.appendChild(f);');
   parts.push('  }');
@@ -415,8 +423,8 @@ function adminPage() {
   parts.push('<input type="hidden" id="eid">');
   parts.push('<label>Title</label>');
   parts.push('<input type="text" id="title">');
-  parts.push('<label>Video URL / Embed</label>');
-  parts.push('<textarea id="vurl"></textarea>');
+  parts.push('<label>Video URL / Embed Code</label>');
+  parts.push('<textarea id="vurl" placeholder="যেকোনো ভিডিও লিংক অথবা iframe কোড দিন"></textarea>');
   parts.push('<label>Thumbnail URL (optional)</label>');
   parts.push('<input type="text" id="thumb">');
   parts.push('<button class="primary" id="sb">Add Movie</button>');
