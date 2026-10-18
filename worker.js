@@ -47,6 +47,7 @@ async function fetchSourceData(request) {
       
       if (res.ok) {
         htmlText = await res.text();
+        // চেক করা হচ্ছে ডাটা আছে কিনা
         if (!htmlText.includes('video_alt_url') && !htmlText.includes('video_url')) {
           isBlocked = true;
         }
@@ -57,7 +58,7 @@ async function fetchSourceData(request) {
       isBlocked = true;
     }
 
-    // ২. যদি ব্লক থাকে, তবে r.jina.ai ব্যবহার করে সোর্স কোড আনা
+    // ২. যদি সরাসরি ব্লক থাকে, তবে r.jina.ai ব্যবহার করে সোর্স কোড আনা (বট বাইপাস)
     if (isBlocked) {
       try {
         const jinaRes = await fetch("https://r.jina.ai/" + targetUrl, {
@@ -70,17 +71,15 @@ async function fetchSourceData(request) {
     }
 
     if (!htmlText) {
-      return json({ error: "Failed to load page source." }, 400);
+      return json({ error: "Failed to load page source. Site might be heavily protected." }, 400);
     }
 
     // রেগুলার এক্সপ্রেশন: সিঙ্গেল ('), ডাবল (") এবং স্পেস হ্যান্ডেল করবে
     const getMatch = (key) => {
-      // প্যাটার্ন ১: video_title: 'Example' অথবা video_title: "Example"
       let regex = new RegExp(key + "\\s*:\\s*['\"]([^'\"]+)['\"]", "i");
       let match = htmlText.match(regex);
       if (match) return match[1];
 
-      // প্যাটার্ন ২: যদি JSON ফরম্যাটে থাকে (Jina এর ক্ষেত্রে)
       regex = new RegExp('"' + key + '"\\s*:\\s*"([^"]+)"', "i");
       match = htmlText.match(regex);
       if (match) return match[1];
@@ -94,7 +93,7 @@ async function fetchSourceData(request) {
     let video_url = getMatch('video_alt_url') || getMatch('video_url');
 
     if(!video_url) {
-       return json({ error: "Could not find video link. The site might be blocking scrapers or format changed." }, 400);
+       return json({ error: "Could not find video link. Please try Smart Paste." }, 400);
     }
 
     return json({
@@ -512,6 +511,10 @@ function adminPage() {
   parts.push('.tabs button.active{background:#ff0040;border-color:#ff0040}');
   parts.push('.auto-box{background:#2a2a2a;border:1px dashed #ff9800;padding:15px;border-radius:8px;margin-bottom:20px}');
   parts.push('.paste-box{background:#1a2a3a;border:1px dashed #00c853;padding:15px;border-radius:8px;margin-bottom:20px}');
+  // লাইভ প্রিভিউ বক্স
+  parts.push('.preview-box{width:100%; height:400px; background:#000; border-radius:8px; border:2px solid #ff9800; margin-top:15px; display:none; position:relative; overflow:hidden;}');
+  parts.push('.preview-box iframe{width:100%; height:100%; border:0;}');
+  parts.push('.close-preview{position:absolute; top:5px; right:5px; background:#c00; color:#fff; border:none; padding:8px 12px; border-radius:4px; cursor:pointer; z-index:10; font-weight:bold;}');
   parts.push('</style></head><body>');
   parts.push('<header><h1>Admin Panel</h1><a href="/">Home</a></header>');
   parts.push('<div class="wrap">');
@@ -538,11 +541,15 @@ function adminPage() {
   parts.push('<p class="hint" style="margin-bottom:10px;">লিংক দিন এবং ডাটা এক্সট্রাক্ট করুন। (নিচে পেজটি ওপেন করার বাটনও পাবেন)</p>');
   parts.push('<input type="text" id="scrapeUrl" placeholder="https://example.com/video-page">');
   parts.push('<div style="display:flex; gap:10px; flex-wrap:wrap;">');
-  parts.push('  <button class="primary" style="background:#ff9800; margin-top:10px;" id="scrapeBtn">Extract Data</button>');
-  // নতুন লাইভ ওপেন বাটন (নতুন ট্যাবে)
+  parts.push('  <button class="primary" style="background:#ff9800; margin-top:10px;" id="scrapeBtn">Open & Extract</button>');
   parts.push('  <button class="primary" style="background:#2196F3; margin-top:10px;" id="openLiveBtn">🔗 Open Page Live</button>');
   parts.push('</div>');
   parts.push('<div id="sm" class="msg" style="margin-top:10px;"></div>');
+  // লাইভ প্রিভিউ বক্স
+  parts.push('<div id="livePreview" class="preview-box">');
+  parts.push('  <button class="close-preview" onclick="closePreview()">✖ Close</button>');
+  parts.push('  <iframe id="previewFrame" sandbox="allow-same-origin allow-scripts allow-popups allow-forms"></iframe>');
+  parts.push('</div>');
   parts.push('</div>');
 
   // ২. স্মার্ট পেস্ট (সোর্স কোড থেকে)
@@ -597,8 +604,8 @@ function adminPage() {
   parts.push('  $("cb").onclick=reset;');
   parts.push('  $("logoutBtn").onclick=logout;');
   parts.push('  $("adsSaveBtn").onclick=saveAds;');
-  parts.push('  $("scrapeBtn").onclick=autoFetch;');
-  parts.push('  $("openLiveBtn").onclick=openLivePage;'); // নতুন লাইভ বাটন
+  parts.push('  $("scrapeBtn").onclick=autoFetchWithPreview;');
+  parts.push('  $("openLiveBtn").onclick=openLivePage;');
   parts.push('  $("parseBtn").onclick=parseSourceCode;');
   parts.push('  document.querySelectorAll("[data-tab]").forEach(function(b){');
   parts.push('    b.onclick=function(){tab(b.getAttribute("data-tab"))};');
@@ -652,7 +659,11 @@ function adminPage() {
   parts.push('  $("cb").classList.add("hidden");');
   parts.push('}');
 
-  // নতুন ফাংশন: পেজটি নতুন ট্যাবে ওপেন করা
+  parts.push('function closePreview(){');
+  parts.push('  $("livePreview").style.display="none";');
+  parts.push('  $("previewFrame").src="";');
+  parts.push('}');
+
   parts.push('function openLivePage(){');
   parts.push('  var url=$("scrapeUrl").value.trim();');
   parts.push('  var m=$("sm");');
@@ -660,12 +671,20 @@ function adminPage() {
   parts.push('  window.open(url, "_blank");');
   parts.push('}');
 
-  // URL অটো ফেচ ফাংশন
-  parts.push('async function autoFetch(){');
+  parts.push('async function autoFetchWithPreview(){');
   parts.push('  var url=$("scrapeUrl").value.trim();');
   parts.push('  var m=$("sm");');
+  parts.push('  var previewBox = $("livePreview");');
+  parts.push('  var frame = $("previewFrame");');
+  
   parts.push('  if(!url){m.textContent="URL required";m.className="msg err show";return}');
-  parts.push('  m.textContent="Fetching data... Please wait...";m.className="msg show";m.style.color="#fff";');
+  
+  // লাইভ প্রিভিউ দেখানো
+  parts.push('  previewBox.style.display="block";');
+  parts.push('  frame.src = url;');
+  
+  // ব্যাকগ্রাউন্ডে ডাটা এক্সট্রাক্ট করা
+  parts.push('  m.textContent="Extracting data in background...";m.className="msg show";m.style.color="#fff";');
   parts.push('  try{');
   parts.push('    var r=await fetch("/api/fetch-source",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:url})});');
   parts.push('    var d=await r.json();');
@@ -674,13 +693,12 @@ function adminPage() {
   parts.push('      m.textContent="Data fetched successfully!";m.className="msg ok show";');
   parts.push('      m.style.color="#b6ffb6";');
   parts.push('    }else{');
-  parts.push('      m.textContent=d.error || "Failed to fetch data. Try Smart Paste below.";m.className="msg err show";');
+  parts.push('      m.textContent=d.error || "Failed to fetch data. Please use Smart Paste.";m.className="msg err show";');
   parts.push('      m.style.color="#ffb6b6";');
   parts.push('    }');
   parts.push('  }catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}');
   parts.push('}');
 
-  // সোর্স কোড থেকে ডাটা এক্সট্রাক্ট করার ফাংশন (Smart Paste)
   parts.push('function parseSourceCode(){');
   parts.push('  var text = $("sourceCode").value;');
   parts.push('  var m = $("pm");');
@@ -710,7 +728,6 @@ function adminPage() {
   parts.push('  }');
   parts.push('}');
 
-  // ফর্ম ফিল করার কমন ফাংশন
   parts.push('function fillForm(data){');
   parts.push('  $("title").value = data.title || "";');
   parts.push('  $("vurl").value = data.videoUrl || "";');
