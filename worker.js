@@ -26,12 +26,9 @@ export default {
 function extractSrc(input) {
   if (!input) return "";
   const s = input.trim();
-  // iframe থেকে src বের করা
   const m1 = s.match(/<iframe[^>]*\ssrc\s*=\s*["']([^"']+)["']/i);
   if (m1) return m1[1];
-  // সরাসরি URL হলে
   if (/^https?:\/\/\S+$/i.test(s)) return s;
-  // টেক্সটের ভেতর থেকে URL খোঁজা
   const m2 = s.match(/https?:\/\/[^\s"'<>]+/i);
   if (m2) return m2[0];
   return s;
@@ -294,10 +291,16 @@ function watchPage(id) {
   parts.push('.player iframe,.player video{width:100%;height:100%;border:0;display:block}');
   parts.push('.title{margin-top:20px;font-size:22px;font-weight:700}');
   parts.push('.ad{margin:20px 0;text-align:center;overflow:hidden}');
+  // কাস্টম ফুলস্ক্রিন বাটনের ডিজাইন
+  parts.push('.controls{display:flex;justify-content:flex-end;margin-top:10px}');
+  parts.push('.fs-btn{background:#ff0040;color:#fff;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:bold;display:flex;align-items:center;gap:8px}');
+  parts.push('.fs-btn:hover{background:#e60039}');
   parts.push('</style></head><body>');
   parts.push('<header><h1>MovieHub</h1><a href="/">← Home</a></header>');
   parts.push('<div class="wrap">');
   parts.push('<div class="player" id="pb"></div>');
+  // ফুলস্ক্রিন বাটন কন্টেইনার
+  parts.push('<div class="controls" id="ctrl" style="display:none;"><button class="fs-btn" onclick="openFullscreen()">⛶ Full Screen</button></div>');
   parts.push('<div class="title" id="t">Loading...</div>');
   parts.push('<div class="ad" id="adBox"></div>');
   parts.push('</div>');
@@ -319,6 +322,19 @@ parts.push('    } else { c.appendChild(n.cloneNode(true)); }');
 parts.push('  });');
 parts.push('  sc.forEach(function(s){c.appendChild(s);});');
 parts.push('}');
+
+// কাস্টম ফুলস্ক্রিন ফাংশন
+parts.push('function openFullscreen() {');
+parts.push('  var elem = document.getElementById("pb");');
+parts.push('  if (elem.requestFullscreen) {');
+parts.push('    elem.requestFullscreen();');
+parts.push('  } else if (elem.webkitRequestFullscreen) { /* Safari */');
+parts.push('    elem.webkitRequestFullscreen();');
+parts.push('  } else if (elem.msRequestFullscreen) { /* IE11 */');
+parts.push('    elem.msRequestFullscreen();');
+parts.push('  }');
+parts.push('}');
+
   parts.push('var id=new URLSearchParams(location.search).get("id");');
   parts.push('async function go(){');
   parts.push('  var p=1,all=[];');
@@ -333,21 +349,20 @@ parts.push('}');
   parts.push('  if(!mv){document.getElementById("t").textContent="Not found";return}');
   parts.push('  document.getElementById("t").textContent=mv.title;');
   parts.push('  var pb=document.getElementById("pb");');
-  
-  // ডাইরেক্ট ভিডিও ফাইল চেক করা
   parts.push('  var direct=/\\.(mp4|webm|ogg|m3u8)(\\?|$)/i.test(mv.videoUrl);');
+  
+  // বাটন দেখানোর লজিক
+  parts.push('  document.getElementById("ctrl").style.display="flex";');
+
   parts.push('  if(direct){');
   parts.push('    var v=document.createElement("video");');
   parts.push('    v.src=mv.videoUrl;v.controls=true;v.autoplay=true;v.playsInline=true;');
   parts.push('    pb.appendChild(v);');
   parts.push('  }else{');
-  // ফুল স্ক্রিন এবং অটোপ্লে পারমিশন আরও শক্তিশালী করা হয়েছে
   parts.push('    var f=document.createElement("iframe");');
   parts.push('    f.src=mv.videoUrl;');
-  parts.push('    f.setAttribute("allow", "autoplay; fullscreen; encrypted-media; picture-in-picture; web-share; clipboard-write;");');
-  parts.push('    f.setAttribute("allowFullscreen", "true");');
-  parts.push('    f.setAttribute("webkitallowfullscreen", "true");');
-  parts.push('    f.setAttribute("mozallowfullscreen", "true");');
+  parts.push('    f.allow="autoplay;encrypted-media;picture-in-picture;fullscreen";');
+  parts.push('    f.allowFullscreen=true;');
   parts.push('    f.referrerPolicy="no-referrer";');
   parts.push('    pb.appendChild(f);');
   parts.push('  }');
@@ -423,8 +438,8 @@ function adminPage() {
   parts.push('<input type="hidden" id="eid">');
   parts.push('<label>Title</label>');
   parts.push('<input type="text" id="title">');
-  parts.push('<label>Video URL / Embed Code</label>');
-  parts.push('<textarea id="vurl" placeholder="যেকোনো ভিডিও লিংক অথবা iframe কোড দিন"></textarea>');
+  parts.push('<label>Video URL / Embed</label>');
+  parts.push('<textarea id="vurl"></textarea>');
   parts.push('<label>Thumbnail URL (optional)</label>');
   parts.push('<input type="text" id="thumb">');
   parts.push('<button class="primary" id="sb">Add Movie</button>');
