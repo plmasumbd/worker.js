@@ -26,39 +26,53 @@ export default {
   }
 };
 
-// --- Auto Fetch Function ---
+// ================= AUTO FETCH / SCRAPER =================
 async function fetchSourceData(request) {
   try {
     const body = await request.json();
     const targetUrl = body.url;
     if (!targetUrl) return json({ error: "URL required" }, 400);
 
+    // ওয়েবসাইট থেকে HTML লোড করা (বট ডিটেকশন এড়াতে User-Agent দেওয়া হয়েছে)
     const res = await fetch(targetUrl, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5"
       }
     });
     
-    if (!res.ok) return json({ error: "Failed to load URL" }, 400);
+    if (!res.ok) return json({ error: "Failed to load URL. Status: " + res.status }, 400);
     const htmlText = await res.text();
 
+    // রেগুলার এক্সপ্রেশন দিয়ে ডাটা খোঁজার ফাংশন (সিঙ্গেল কোটেশন ' এর জন্য)
     const getMatch = (regex) => {
       const match = htmlText.match(regex);
       return match ? match[1] : "";
     };
 
-    const video_title = getMatch(/video_title:\s*['"]([^'"]+)['"]/);
-    const video_id = getMatch(/video_id:\s*['"]([^'"]+)['"]/);
-    const preview_url1 = getMatch(/preview_url1:\s*['"]([^'"]+)['"]/);
-    const video_alt_url = getMatch(/video_alt_url:\s*['"]([^'"]+)['"]/);
+    // আপনার স্ক্রিনশট অনুযায়ী সঠিক প্যাটার্ন
+    const video_title = getMatch(/video_title:\s*'([^']+)'/);
+    const video_id = getMatch(/video_id:\s*'([^']+)'/);
+    
+    // থাম্বনেইল (preview_url বা preview_url1)
+    const preview_url = getMatch(/preview_url:\s*'([^']+)'/) || getMatch(/preview_url1:\s*'([^']+)'/);
+    
+    // ভিডিও লিংক (video_alt_url আগে চেক করবে, না পেলে video_url)
+    const video_alt_url = getMatch(/video_alt_url:\s*'([^']+)'/);
+    const video_url = video_alt_url || getMatch(/video_url:\s*'([^']+)'/);
+
+    if(!video_url) {
+       return json({ error: "Could not find video link. The site might be blocking scrapers." }, 400);
+    }
 
     return json({
       success: true,
       data: {
         title: video_title,
         id: video_id,
-        thumbnail: preview_url1,
-        videoUrl: video_alt_url
+        thumbnail: preview_url,
+        videoUrl: video_url
       }
     });
 
@@ -67,6 +81,7 @@ async function fetchSourceData(request) {
   }
 }
 
+// ================= HELPER FUNCTIONS =================
 function extractSrc(input) {
   if (!input) return "";
   const s = input.trim();
@@ -104,7 +119,7 @@ async function addMovie(request, env) {
   const auth = request.headers.get("X-Admin-Password");
   if (auth !== ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
   const b = await request.json();
-  if (!b.title || !b.videoUrl) return json({ error: "Missing" }, 400);
+  if (!b.title || !b.videoUrl) return json({ error: "Missing Title or Video URL" }, 400);
   
   const raw = await env.MOVIES.get("movie_list");
   const list = raw ? JSON.parse(raw) : [];
@@ -121,6 +136,7 @@ async function addMovie(request, env) {
     createdAt: Date.now()
   };
   
+  // ডুপ্লিকেট চেক (যদি স্ক্র্যাপ করা video_id আগে থেকেই থাকে)
   if (b.videoId && list.find(m => m.id === b.videoId)) {
      return json({ error: "This video is already added!" }, 400);
   }
@@ -487,7 +503,7 @@ function adminPage() {
   parts.push('<div class="card auto-box">');
   parts.push('<h2 style="color:#fff;margin-bottom:10px;">⚡ Auto Fetch from Source URL</h2>');
   parts.push('<p class="hint" style="margin-bottom:10px;">যে সাইট থেকে ভিডিও নিচ্ছেন, তার পেজের লিংক দিন। অটোমেটিক ডাটা বের করে আনবে।</p>');
-  parts.push('<input type="text" id="scrapeUrl" placeholder="https://example.com/video-page">');
+  parts.push('<input type="text" id="scrapeUrl" placeholder="https://letsjerk.com/video-link">');
   parts.push('<button class="primary" style="background:#00c853; margin-top:10px;" id="scrapeBtn">Auto Fetch</button>');
   parts.push('<div id="sm" class="msg" style="margin-top:10px;"></div>');
   parts.push('</div>');
@@ -588,7 +604,7 @@ function adminPage() {
   parts.push('  var url=$("scrapeUrl").value.trim();');
   parts.push('  var m=$("sm");');
   parts.push('  if(!url){m.textContent="URL required";m.className="msg err show";return}');
-  parts.push('  m.textContent="Fetching data...";m.className="msg show";m.style.color="#fff";');
+  parts.push('  m.textContent="Fetching data... Please wait...";m.className="msg show";m.style.color="#fff";');
   parts.push('  try{');
   parts.push('    var r=await fetch("/api/fetch-source",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:url})});');
   parts.push('    var d=await r.json();');
@@ -600,7 +616,7 @@ function adminPage() {
   parts.push('      m.textContent="Data fetched successfully!";m.className="msg ok show";');
   parts.push('      m.style.color="#b6ffb6";');
   parts.push('    }else{');
-  parts.push('      m.textContent=d.error || "Failed to fetch data";m.className="msg err show";');
+  parts.push('      m.textContent=d.error || "Failed to fetch data. Site might block it.";m.className="msg err show";');
   parts.push('      m.style.color="#ffb6b6";');
   parts.push('    }');
   parts.push('  }catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}');
