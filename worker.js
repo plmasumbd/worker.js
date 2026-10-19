@@ -136,11 +136,9 @@ async function listMovies(env, url) {
   const raw = await env.MOVIES.get("movie_list");
   let list = raw ? JSON.parse(raw) : [];
 
-  // সার্চ ফিল্টার
   if (search) {
     list = list.filter(m => m.title.toLowerCase().includes(search));
   } else {
-    // সার্চ না থাকলে রেন্ডম শাফল (Randomize)
     for (let i = list.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [list[i], list[j]] = [list[j], list[i]];
@@ -255,7 +253,7 @@ function html(s) {
   });
 }
 
-// ================= HOME PAGE (With Search, Random & Hover Preview) =================
+// ================= HOME PAGE (With Search & Trailer Hover) =================
 function homePage() {
   const parts = [];
   parts.push('<!DOCTYPE html>');
@@ -278,11 +276,13 @@ function homePage() {
   parts.push('.card:hover{transform:translateY(-5px);box-shadow:0 10px 25px rgba(255,0,64,.3)}');
   parts.push('.thumb{width:100%;aspect-ratio:16/9;background:#333 center/cover no-repeat;position:relative;overflow:hidden}');
   
-  // হোভার ভিডিওর স্টাইল
-  parts.push('.hover-video{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity 0.5s; z-index:2; pointer-events:none;}');
-  parts.push('.card:hover .hover-video{opacity:1;}');
+  // ট্রেইলার ভিডিওর স্টাইল
+  parts.push('.trailer-video{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity 0.4s ease;z-index:2;pointer-events:none;}');
+  parts.push('.thumb.playing .trailer-video{opacity:1;}');
   
-  parts.push('.play{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:50px;height:50px;background:rgba(255,0,64,.9);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;color:#fff;z-index:3;}');
+  parts.push('.play{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:50px;height:50px;background:rgba(255,0,64,.9);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;color:#fff;z-index:3;transition:.3s;}');
+  parts.push('.thumb.playing .play{opacity:0;transform:translate(-50%,-50%) scale(0.5);}');
+  
   parts.push('.info{padding:12px}');
   parts.push('.info h3{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}');
   parts.push('.pager{display:flex;justify-content:center;gap:8px;margin-top:40px;flex-wrap:wrap}');
@@ -374,39 +374,42 @@ function homePage() {
   parts.push('    a.className="card";');
   parts.push('    a.href="/watch?id="+m.id;');
   
-  // চেক করা হচ্ছে লিংকটি সরাসরি mp4 কিনা (প্রিভিউ এর জন্য)
+  // সরাসরি ভিডিও লিংক কিনা চেক করা (Trailer প্লে করার জন্য)
   parts.push('    var isDirect = /\\.(mp4|webm|ogg)(\\?|$)/i.test(m.videoUrl);');
   parts.push('    var s=m.thumbnail?("background-image:url(\'" + m.thumbnail + "\')"):"";');
-  
-  // ডিভাইস টাইপ চেক (মোবাইল হলে hover এর বদলে touch ইভেন্ট)
   parts.push('    var isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);');
   
-  // কার্ডের ভেতরের HTML (হোভার ভিডিও সহ)
-  parts.push('    var innerHtml = \'<div class="thumb" style="\'+s+\'">\';');
+  parts.push('    var innerHtml = \'<div class="thumb" style="\'+s+\'" data-video="\'+(isDirect ? m.videoUrl : "")+\'">\';');
+  
+  // যদি ভিডিও সরাসরি mp4 হয়, তবেই ট্রেইলার ভিডিও যুক্ত হবে
   parts.push('    if(isDirect) {');
-  parts.push('      innerHtml += \'<video class="hover-video" src="\'+m.videoUrl+\'" muted loop playsinline preload="none"></video>\';');
+  parts.push('      innerHtml += \'<video class="trailer-video" src="\'+m.videoUrl+\'" muted loop playsinline preload="none"></video>\';');
   parts.push('    }');
+  
   parts.push('    innerHtml += \'<div class="play">▶</div></div><div class="info"><h3>\'+esc(m.title)+\'</h3></div>\';');
   parts.push('    a.innerHTML = innerHtml;');
   
-  // হোভার বা টাচ ইভেন্ট হ্যান্ডলার
-  parts.push('    var vid = a.querySelector(".hover-video");');
+  parts.push('    var thumbDiv = a.querySelector(".thumb");');
+  parts.push('    var vid = a.querySelector(".trailer-video");');
+  
   parts.push('    if(vid){');
+  // মোবাইল বা ডেস্কটপের জন্য ইভেন্ট
   parts.push('      if(isMobile){');
-  // মোবাইলে প্রথম ট্যাপে ভিডিও প্লে হবে, দ্বিতীয় ট্যাপে লিংকে যাবে
   parts.push('        a.addEventListener("touchstart", function(e){');
-  parts.push('          if(!vid.dataset.played){');
+  parts.push('          if(!thumbDiv.classList.contains("playing")){');
   parts.push('            e.preventDefault();');
+  parts.push('            thumbDiv.classList.add("playing");');
   parts.push('            vid.play().catch(function(){});');
   parts.push('            vid.dataset.played = "true";');
   parts.push('          }');
   parts.push('        }, {passive: false});');
   parts.push('      } else {');
-  // ডেস্কটপে মাউস নিলে ভিডিও প্লে হবে
   parts.push('        a.addEventListener("mouseenter", function(){');
+  parts.push('          thumbDiv.classList.add("playing");');
   parts.push('          vid.play().catch(function(){});');
   parts.push('        });');
   parts.push('        a.addEventListener("mouseleave", function(){');
+  parts.push('          thumbDiv.classList.remove("playing");');
   parts.push('          vid.pause();');
   parts.push('          vid.currentTime = 0;');
   parts.push('        });');
