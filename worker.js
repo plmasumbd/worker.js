@@ -262,12 +262,13 @@ function homePage() {
   parts.push('<html lang="bn"><head>');
   parts.push('<meta charset="UTF-8">');
   parts.push('<meta name="viewport" content="width=device-width,initial-scale=1">');
-  parts.push('<title>MovieHub</title>');
+  parts.push('<title>AdultMovie</title>');
   parts.push('<style>');
   parts.push('*{margin:0;padding:0;box-sizing:border-box}');
   parts.push('body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#eee;min-height:100vh}');
   parts.push('header{background:#1a1a1a;padding:15px 24px;display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #ff0040;position:sticky;top:0;z-index:100;flex-wrap:wrap;gap:10px}');
-  parts.push('header h1{color:#ff0040;font-size:24px}');
+  // লোগো ডিজাইন এবং লিংক
+  parts.push('header a.logo{color:#ff0040;font-size:24px;font-weight:bold;text-decoration:none;cursor:pointer;}');
   // সার্চ বারের ডিজাইন
   parts.push('.search-box{flex:1; max-width:400px; display:flex; gap:5px;}');
   parts.push('.search-box input{width:100%; padding:10px 15px; background:#111; border:1px solid #333; border-radius:6px; color:#fff; font-size:15px; outline:none;}');
@@ -290,7 +291,7 @@ function homePage() {
   parts.push('.ad{margin:20px 0;text-align:center;overflow:hidden}');
   parts.push('</style></head><body>');
   parts.push('<header>');
-  parts.push('  <h1>MovieHub</h1>');
+  parts.push('  <a href="/" class="logo">AdultMovie</a>'); // এখানে লিংক দেওয়া হয়েছে
   parts.push('  <div class="search-box">');
   parts.push('    <input type="text" id="searchInput" placeholder="Search videos..." onkeypress="handleSearch(event)">');
   parts.push('    <button onclick="triggerSearch()">Search</button>');
@@ -337,7 +338,6 @@ function homePage() {
   parts.push('  }catch(e){console.error("Ad error:", e);}');
   parts.push('}');
   
-  // সার্চ হ্যান্ডলার
   parts.push('function handleSearch(e){');
   parts.push('  if(e.key === "Enter"){');
   parts.push('    triggerSearch();');
@@ -425,13 +425,13 @@ function watchPage(id) {
   parts.push('<html lang="bn"><head>');
   parts.push('<meta charset="UTF-8">');
   parts.push('<meta name="viewport" content="width=device-width,initial-scale=1">');
-  parts.push('<title>Watch</title>');
+  parts.push('<title>Watch - AdultMovie</title>');
   parts.push('<style>');
   parts.push('*{margin:0;padding:0;box-sizing:border-box}');
   parts.push('body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#eee}');
   parts.push('header{background:#1a1a1a;padding:16px 24px;border-bottom:2px solid #ff0040;display:flex;justify-content:space-between;align-items:center}');
-  parts.push('header h1{color:#ff0040;font-size:22px}');
-  parts.push('header a{color:#eee;text-decoration:none;padding:8px 14px;background:#ff0040;border-radius:6px;font-size:14px}');
+  parts.push('header a.logo{color:#ff0040;font-size:22px;font-weight:bold;text-decoration:none;}');
+  parts.push('header a.back-btn{color:#eee;text-decoration:none;padding:8px 14px;background:#ff0040;border-radius:6px;font-size:14px}');
   parts.push('.wrap{max-width:1000px;margin:30px auto;padding:0 20px}');
   parts.push('.player{width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden;position:relative}');
   parts.push('.player iframe,.player video{width:100%;height:100%;border:0;display:block}');
@@ -441,7 +441,7 @@ function watchPage(id) {
   parts.push('.fs-btn{background:#ff0040;color:#fff;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:bold;display:flex;align-items:center;gap:8px}');
   parts.push('.fs-btn:hover{background:#e60039}');
   parts.push('</style></head><body>');
-  parts.push('<header><h1>MovieHub</h1><a href="/">← Home</a></header>');
+  parts.push('<header><a href="/" class="logo">AdultMovie</a><a href="/" class="back-btn">← Home</a></header>');
   parts.push('<div class="wrap">');
   parts.push('<div class="player" id="pb"></div>');
   parts.push('<div class="controls" id="ctrl" style="display:none;"><button class="fs-btn" onclick="openFullscreen()">⛶ Full Screen</button></div>');
@@ -523,7 +523,7 @@ function adminPage() {
   parts.push('<html lang="bn"><head>');
   parts.push('<meta charset="UTF-8">');
   parts.push('<meta name="viewport" content="width=device-width,initial-scale=1">');
-  parts.push('<title>Admin</title>');
+  parts.push('<title>Admin - AdultMovie</title>');
   parts.push('<style>');
   parts.push('*{margin:0;padding:0;box-sizing:border-box}');
   parts.push('body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#eee;min-height:100vh}');
@@ -562,7 +562,7 @@ function adminPage() {
   parts.push('.preview-box iframe{width:100%; height:100%; border:0;}');
   parts.push('.close-preview{position:absolute; top:5px; right:5px; background:#c00; color:#fff; border:none; padding:8px 12px; border-radius:4px; cursor:pointer; z-index:10; font-weight:bold;}');
   parts.push('</style></head><body>');
-  parts.push('<header><h1>Admin Panel</h1><a href="/">Home</a></header>');
+  parts.push('<header><h1>Admin Panel - AdultMovie</h1><a href="/">Home</a></header>');
   parts.push('<div class="wrap">');
   
   parts.push('<div id="login" class="card">');
