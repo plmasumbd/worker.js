@@ -255,7 +255,7 @@ function html(s) {
   });
 }
 
-// ================= HOME PAGE (With Search & Random) =================
+// ================= HOME PAGE (With Search, Random & Hover Preview) =================
 function homePage() {
   const parts = [];
   parts.push('<!DOCTYPE html>');
@@ -267,19 +267,22 @@ function homePage() {
   parts.push('*{margin:0;padding:0;box-sizing:border-box}');
   parts.push('body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#eee;min-height:100vh}');
   parts.push('header{background:#1a1a1a;padding:15px 24px;display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #ff0040;position:sticky;top:0;z-index:100;flex-wrap:wrap;gap:10px}');
-  // লোগো ডিজাইন এবং লিংক
   parts.push('header a.logo{color:#ff0040;font-size:24px;font-weight:bold;text-decoration:none;cursor:pointer;}');
-  // সার্চ বারের ডিজাইন
   parts.push('.search-box{flex:1; max-width:400px; display:flex; gap:5px;}');
   parts.push('.search-box input{width:100%; padding:10px 15px; background:#111; border:1px solid #333; border-radius:6px; color:#fff; font-size:15px; outline:none;}');
   parts.push('.search-box input:focus{border-color:#ff0040;}');
   parts.push('.search-box button{background:#ff0040; color:#fff; border:none; padding:10px 20px; border-radius:6px; cursor:pointer; font-weight:bold;}');
   parts.push('.box{max-width:1300px;margin:0 auto;padding:30px 20px}');
   parts.push('.grid{display:grid;gap:20px;grid-template-columns:repeat(auto-fill,minmax(200px,1fr))}');
-  parts.push('.card{background:#1c1c1c;border-radius:10px;overflow:hidden;text-decoration:none;color:#eee;display:block;transition:.3s}');
+  parts.push('.card{background:#1c1c1c;border-radius:10px;overflow:hidden;text-decoration:none;color:#eee;display:block;transition:.3s;position:relative}');
   parts.push('.card:hover{transform:translateY(-5px);box-shadow:0 10px 25px rgba(255,0,64,.3)}');
-  parts.push('.thumb{width:100%;aspect-ratio:16/9;background:#333 center/cover no-repeat;position:relative}');
-  parts.push('.play{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:50px;height:50px;background:rgba(255,0,64,.9);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;color:#fff}');
+  parts.push('.thumb{width:100%;aspect-ratio:16/9;background:#333 center/cover no-repeat;position:relative;overflow:hidden}');
+  
+  // হোভার ভিডিওর স্টাইল
+  parts.push('.hover-video{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity 0.5s; z-index:2; pointer-events:none;}');
+  parts.push('.card:hover .hover-video{opacity:1;}');
+  
+  parts.push('.play{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:50px;height:50px;background:rgba(255,0,64,.9);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;color:#fff;z-index:3;}');
   parts.push('.info{padding:12px}');
   parts.push('.info h3{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}');
   parts.push('.pager{display:flex;justify-content:center;gap:8px;margin-top:40px;flex-wrap:wrap}');
@@ -291,7 +294,7 @@ function homePage() {
   parts.push('.ad{margin:20px 0;text-align:center;overflow:hidden}');
   parts.push('</style></head><body>');
   parts.push('<header>');
-  parts.push('  <a href="/" class="logo">AdultMovie</a>'); // এখানে লিংক দেওয়া হয়েছে
+  parts.push('  <a href="/" class="logo">AdultMovie</a>');
   parts.push('  <div class="search-box">');
   parts.push('    <input type="text" id="searchInput" placeholder="Search videos..." onkeypress="handleSearch(event)">');
   parts.push('    <button onclick="triggerSearch()">Search</button>');
@@ -370,8 +373,46 @@ function homePage() {
   parts.push('    var a=document.createElement("a");');
   parts.push('    a.className="card";');
   parts.push('    a.href="/watch?id="+m.id;');
+  
+  // চেক করা হচ্ছে লিংকটি সরাসরি mp4 কিনা (প্রিভিউ এর জন্য)
+  parts.push('    var isDirect = /\\.(mp4|webm|ogg)(\\?|$)/i.test(m.videoUrl);');
   parts.push('    var s=m.thumbnail?("background-image:url(\'" + m.thumbnail + "\')"):"";');
-  parts.push('    a.innerHTML=\'<div class="thumb" style="\'+s+\'"><div class="play">▶</div></div><div class="info"><h3>\'+esc(m.title)+\'</h3></div>\';');
+  
+  // ডিভাইস টাইপ চেক (মোবাইল হলে hover এর বদলে touch ইভেন্ট)
+  parts.push('    var isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);');
+  
+  // কার্ডের ভেতরের HTML (হোভার ভিডিও সহ)
+  parts.push('    var innerHtml = \'<div class="thumb" style="\'+s+\'">\';');
+  parts.push('    if(isDirect) {');
+  parts.push('      innerHtml += \'<video class="hover-video" src="\'+m.videoUrl+\'" muted loop playsinline preload="none"></video>\';');
+  parts.push('    }');
+  parts.push('    innerHtml += \'<div class="play">▶</div></div><div class="info"><h3>\'+esc(m.title)+\'</h3></div>\';');
+  parts.push('    a.innerHTML = innerHtml;');
+  
+  // হোভার বা টাচ ইভেন্ট হ্যান্ডলার
+  parts.push('    var vid = a.querySelector(".hover-video");');
+  parts.push('    if(vid){');
+  parts.push('      if(isMobile){');
+  // মোবাইলে প্রথম ট্যাপে ভিডিও প্লে হবে, দ্বিতীয় ট্যাপে লিংকে যাবে
+  parts.push('        a.addEventListener("touchstart", function(e){');
+  parts.push('          if(!vid.dataset.played){');
+  parts.push('            e.preventDefault();');
+  parts.push('            vid.play().catch(function(){});');
+  parts.push('            vid.dataset.played = "true";');
+  parts.push('          }');
+  parts.push('        }, {passive: false});');
+  parts.push('      } else {');
+  // ডেস্কটপে মাউস নিলে ভিডিও প্লে হবে
+  parts.push('        a.addEventListener("mouseenter", function(){');
+  parts.push('          vid.play().catch(function(){});');
+  parts.push('        });');
+  parts.push('        a.addEventListener("mouseleave", function(){');
+  parts.push('          vid.pause();');
+  parts.push('          vid.currentTime = 0;');
+  parts.push('        });');
+  parts.push('      }');
+  parts.push('    }');
+  
   parts.push('    g.appendChild(a);');
   parts.push('  });');
   
