@@ -301,8 +301,8 @@ function homePage() {
   parts.push('.ad{margin:20px 0;text-align:center;overflow:hidden}');
   
   // AdBlocker Pop-up CSS
-  parts.push('.adblock-popup{display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:9999; align-items:center; justify-content:center; text-align:center;}');
-  parts.push('.adblock-content{background:#1c1c1c; padding:30px; border-radius:10px; border:2px solid #ff0040; max-width:400px; margin:20px; box-shadow:0 0 20px rgba(255,0,64,0.5);}');
+  parts.push('.adblock-popup{display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:9999; align-items:center; justify-content:center; text-align:center;}');
+  parts.push('.adblock-content{background:#1c1c1c; padding:30px; border-radius:10px; border:2px solid #ff0040; max-width:450px; margin:20px; box-shadow:0 0 20px rgba(255,0,64,0.5);}');
   parts.push('.adblock-content h2{color:#ff0040; margin-bottom:15px; font-size:24px;}');
   
   parts.push('</style></head><body>');
@@ -329,9 +329,6 @@ function homePage() {
   parts.push('<div id="pager" class="pager"></div>');
   parts.push('<div class="ad" id="adBot"></div>');
   parts.push('</div>');
-  
-  // হিডেন ডিভ (AdBlocker ডিটেক্ট করার জন্য)
-  parts.push('<div id="ad-bait" class="ad-banner" style="position:absolute; left:-9999px; width:10px; height:10px;"></div>');
 
   parts.push('<script>');
   parts.push('var currentPage = 1;');
@@ -371,24 +368,35 @@ function homePage() {
   parts.push('  }catch(e){console.error("Ad error:", e);}');
   parts.push('}');
   
-  // অ্যাডভান্সড AdBlocker ডিটেকশন ফাংশন (রিয়েল টাইম)
+  // ১০০% কাজ করা AdBlocker ডিটেকশন (ফেক গুগল অ্যাড স্ক্রিপ্ট ব্যবহার করে)
   parts.push('function detectAdBlocker(){');
   parts.push('  var isAdmin = localStorage.getItem("admin_token");');
-  parts.push('  if(isAdmin) return;');
+  parts.push('  if(isAdmin) return;'); // অ্যাডমিন হলে চেক করবে না
   
-  parts.push('  var bait = document.createElement("div");');
-  parts.push('  bait.className = "adsbygoogle ad-banner ad-placement";');
-  parts.push('  bait.style.cssText = "width: 1px; height: 1px; position: absolute; left: -9999px; top: -9999px;";');
-  parts.push('  bait.innerHTML = "&nbsp;";');
-  parts.push('  document.body.appendChild(bait);');
+  parts.push('  var s = document.createElement("script");');
+  parts.push('  s.src = "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js";');
+  parts.push('  s.async = true;');
   
+  parts.push('  s.onload = function() {');
+  parts.push('    // স্ক্রিপ্ট লোড হলে অ্যাডব্লকার নেই');
+  parts.push('  };');
+  
+  parts.push('  s.onerror = function() {');
+  parts.push('    // স্ক্রিপ্ট লোড না হলে অ্যাডব্লকার আছে');
+  parts.push('    var popup = document.getElementById("adblockPopup");');
+  parts.push('    if(popup) popup.style.display = "flex";');
+  parts.push('  };');
+  
+  parts.push('  document.head.appendChild(s);');
+  
+  // ফলব্যাক টাইমার (যদি অনলোড/অনেরর ইভেন্ট কাজ না করে)
   parts.push('  setTimeout(function(){');
-  parts.push('    var isBlocked = bait.offsetHeight === 0 || bait.clientHeight === 0 || window.getComputedStyle(bait).display === "none" || window.getComputedStyle(bait).visibility === "hidden";');
-  parts.push('    if (isBlocked) {');
-  parts.push('      document.getElementById("adblockPopup").style.display = "flex";');
+  parts.push('    var isBlocked = !window.adsbygoogle;');
+  parts.push('    if(isBlocked) {');
+  parts.push('      var popup = document.getElementById("adblockPopup");');
+  parts.push('      if(popup) popup.style.display = "flex";');
   parts.push('    }');
-  parts.push('    bait.remove();');
-  parts.push('  }, 500);');
+  parts.push('  }, 1500);');
   parts.push('}');
   
   parts.push('function handleSearch(e){');
@@ -496,8 +504,8 @@ function watchPage(id) {
   parts.push('.fs-btn:hover{background:#e60039}');
   
   // AdBlocker Pop-up CSS
-  parts.push('.adblock-popup{display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:9999; align-items:center; justify-content:center; text-align:center;}');
-  parts.push('.adblock-content{background:#1c1c1c; padding:30px; border-radius:10px; border:2px solid #ff0040; max-width:400px; margin:20px; box-shadow:0 0 20px rgba(255,0,64,0.5);}');
+  parts.push('.adblock-popup{display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:9999; align-items:center; justify-content:center; text-align:center;}');
+  parts.push('.adblock-content{background:#1c1c1c; padding:30px; border-radius:10px; border:2px solid #ff0040; max-width:450px; margin:20px; box-shadow:0 0 20px rgba(255,0,64,0.5);}');
   parts.push('.adblock-content h2{color:#ff0040; margin-bottom:15px; font-size:24px;}');
   
   parts.push('</style></head><body>');
@@ -517,9 +525,6 @@ function watchPage(id) {
   parts.push('<div class="title" id="t">Loading...</div>');
   parts.push('<div class="ad" id="adBox"></div>');
   parts.push('</div>');
-  
-  // হিডেন ডিভ (AdBlocker ডিটেক্ট করার জন্য)
-  parts.push('<div id="ad-bait" class="ad-banner" style="position:absolute; left:-9999px; width:10px; height:10px;"></div>');
 
   parts.push('<script>');
   parts.push('function injectAds(id, code){');
@@ -551,24 +556,33 @@ function watchPage(id) {
   parts.push('  }');
   parts.push('}');
   
-  // অ্যাডভান্সড AdBlocker ডিটেকশন ফাংশন
+  // ১০০% কাজ করা AdBlocker ডিটেকশন
   parts.push('function detectAdBlocker(){');
   parts.push('  var isAdmin = localStorage.getItem("admin_token");');
   parts.push('  if(isAdmin) return;');
   
-  parts.push('  var bait = document.createElement("div");');
-  parts.push('  bait.className = "adsbygoogle ad-banner ad-placement";');
-  parts.push('  bait.style.cssText = "width: 1px; height: 1px; position: absolute; left: -9999px; top: -9999px;";');
-  parts.push('  bait.innerHTML = "&nbsp;";');
-  parts.push('  document.body.appendChild(bait);');
+  parts.push('  var s = document.createElement("script");');
+  parts.push('  s.src = "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js";');
+  parts.push('  s.async = true;');
+  
+  parts.push('  s.onload = function() {');
+  parts.push('    // অ্যাডব্লকার নেই');
+  parts.push('  };');
+  
+  parts.push('  s.onerror = function() {');
+  parts.push('    var popup = document.getElementById("adblockPopup");');
+  parts.push('    if(popup) popup.style.display = "flex";');
+  parts.push('  };');
+  
+  parts.push('  document.head.appendChild(s);');
   
   parts.push('  setTimeout(function(){');
-  parts.push('    var isBlocked = bait.offsetHeight === 0 || bait.clientHeight === 0 || window.getComputedStyle(bait).display === "none" || window.getComputedStyle(bait).visibility === "hidden";');
-  parts.push('    if (isBlocked) {');
-  parts.push('      document.getElementById("adblockPopup").style.display = "flex";');
+  parts.push('    var isBlocked = !window.adsbygoogle;');
+  parts.push('    if(isBlocked) {');
+  parts.push('      var popup = document.getElementById("adblockPopup");');
+  parts.push('      if(popup) popup.style.display = "flex";');
   parts.push('    }');
-  parts.push('    bait.remove();');
-  parts.push('  }, 500);');
+  parts.push('  }, 1500);');
   parts.push('}');
   
   parts.push('var id=new URLSearchParams(location.search).get("id");');
