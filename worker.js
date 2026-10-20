@@ -371,20 +371,24 @@ function homePage() {
   parts.push('  }catch(e){console.error("Ad error:", e);}');
   parts.push('}');
   
-  // AdBlocker পপ-আপ দেখানোর ফাংশন
+  // অ্যাডভান্সড AdBlocker ডিটেকশন ফাংশন (রিয়েল টাইম)
   parts.push('function detectAdBlocker(){');
   parts.push('  var isAdmin = localStorage.getItem("admin_token");');
-  parts.push('  if(isAdmin) return; // অ্যাডমিন হলে চেক করবে না');
+  parts.push('  if(isAdmin) return;');
   
-  parts.push('  var bait = document.getElementById("ad-bait");');
-  parts.push('  if(!bait) return;');
+  parts.push('  var bait = document.createElement("div");');
+  parts.push('  bait.className = "adsbygoogle ad-banner ad-placement";');
+  parts.push('  bait.style.cssText = "width: 1px; height: 1px; position: absolute; left: -9999px; top: -9999px;";');
+  parts.push('  bait.innerHTML = "&nbsp;";');
+  parts.push('  document.body.appendChild(bait);');
   
-  parts.push('  bait.innerHTML = \'<div class="ad-banner" style="width:10px; height:10px;"></div>\';');
-  parts.push('  var isBlocked = bait.offsetHeight === 0 || bait.clientHeight === 0 || getComputedStyle(bait).display === "none";');
-  
-  parts.push('  if (isBlocked) {');
-  parts.push('    document.getElementById("adblockPopup").style.display = "flex";');
-  parts.push('  }');
+  parts.push('  setTimeout(function(){');
+  parts.push('    var isBlocked = bait.offsetHeight === 0 || bait.clientHeight === 0 || window.getComputedStyle(bait).display === "none" || window.getComputedStyle(bait).visibility === "hidden";');
+  parts.push('    if (isBlocked) {');
+  parts.push('      document.getElementById("adblockPopup").style.display = "flex";');
+  parts.push('    }');
+  parts.push('    bait.remove();');
+  parts.push('  }, 500);');
   parts.push('}');
   
   parts.push('function handleSearch(e){');
@@ -547,20 +551,24 @@ function watchPage(id) {
   parts.push('  }');
   parts.push('}');
   
-  // AdBlocker পপ-আপ দেখানোর ফাংশন
+  // অ্যাডভান্সড AdBlocker ডিটেকশন ফাংশন
   parts.push('function detectAdBlocker(){');
   parts.push('  var isAdmin = localStorage.getItem("admin_token");');
   parts.push('  if(isAdmin) return;');
   
-  parts.push('  var bait = document.getElementById("ad-bait");');
-  parts.push('  if(!bait) return;');
+  parts.push('  var bait = document.createElement("div");');
+  parts.push('  bait.className = "adsbygoogle ad-banner ad-placement";');
+  parts.push('  bait.style.cssText = "width: 1px; height: 1px; position: absolute; left: -9999px; top: -9999px;";');
+  parts.push('  bait.innerHTML = "&nbsp;";');
+  parts.push('  document.body.appendChild(bait);');
   
-  parts.push('  bait.innerHTML = \'<div class="ad-banner" style="width:10px; height:10px;"></div>\';');
-  parts.push('  var isBlocked = bait.offsetHeight === 0 || bait.clientHeight === 0 || getComputedStyle(bait).display === "none";');
-  
-  parts.push('  if (isBlocked) {');
-  parts.push('    document.getElementById("adblockPopup").style.display = "flex";');
-  parts.push('  }');
+  parts.push('  setTimeout(function(){');
+  parts.push('    var isBlocked = bait.offsetHeight === 0 || bait.clientHeight === 0 || window.getComputedStyle(bait).display === "none" || window.getComputedStyle(bait).visibility === "hidden";');
+  parts.push('    if (isBlocked) {');
+  parts.push('      document.getElementById("adblockPopup").style.display = "flex";');
+  parts.push('    }');
+  parts.push('    bait.remove();');
+  parts.push('  }, 500);');
   parts.push('}');
   
   parts.push('var id=new URLSearchParams(location.search).get("id");');
