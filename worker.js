@@ -277,7 +277,11 @@ function homePage() {
   parts.push('<title>AdultMovie</title>');
   parts.push('<style>');
   parts.push('*{margin:0;padding:0;box-sizing:border-box}');
-  parts.push('body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#eee;min-height:100vh}');
+  
+  // ১. সুন্দর বাংলা ফন্ট যুক্ত করা হয়েছে
+  parts.push('@import url("https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;600;700&display=swap");');
+  parts.push('body{font-family:"Hind Siliguri", system-ui, sans-serif;background:#0f0f0f;color:#eee;min-height:100vh}');
+  
   parts.push('header{background:#1a1a1a;padding:15px 24px;display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #ff0040;position:sticky;top:0;z-index:100;flex-wrap:wrap;gap:10px}');
   parts.push('header a.logo{color:#ff0040;font-size:24px;font-weight:bold;text-decoration:none;cursor:pointer;}');
   parts.push('.search-box{flex:1; max-width:400px; display:flex; gap:5px;}');
@@ -300,19 +304,19 @@ function homePage() {
   parts.push('.empty{text-align:center;padding:60px 20px;color:#666;font-size:18px;grid-column: 1 / -1;}');
   parts.push('.ad{margin:20px 0;text-align:center;overflow:hidden}');
   
-  // AdBlocker Pop-up CSS
-  parts.push('.adblock-popup{display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:9999; align-items:center; justify-content:center; text-align:center;}');
+  // ২. পপ-আপ স্থায়ী করার জন্য মোডিফাই করা CSS
+  parts.push('.adblock-popup{display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:9999; align-items:center; justify-content:center; text-align:center; flex-direction:column;}');
   parts.push('.adblock-content{background:#1c1c1c; padding:30px; border-radius:10px; border:2px solid #ff0040; max-width:450px; margin:20px; box-shadow:0 0 20px rgba(255,0,64,0.5);}');
   parts.push('.adblock-content h2{color:#ff0040; margin-bottom:15px; font-size:24px;}');
   
   parts.push('</style></head><body>');
   
-  // AdBlocker Pop-up HTML
+  // পপ-আপের HTML
   parts.push('<div id="adblockPopup" class="adblock-popup">');
   parts.push('  <div class="adblock-content">');
   parts.push('    <h2>⚠️ AdBlocker Detected!</h2>');
-  parts.push('    <p style="margin-bottom:20px; color:#ccc; font-size:16px; line-height:1.5;">আমাদের সাইটের একমাত্র আয়ের উৎস হলো বিজ্ঞাপন। দয়া করে আপনার অ্যাডব্লকার বন্ধ করে সাইটটি সাপোর্ট করুন।</p>');
-  parts.push('    <button onclick="location.reload()" style="background:#ff0040; color:#fff; border:none; padding:12px 24px; border-radius:6px; cursor:pointer; font-weight:bold; font-size:16px;">I have disabled it (Reload)</button>');
+  parts.push('    <p style="margin-bottom:20px; color:#ccc; font-size:16px; line-height:1.6;">আমাদের সাইটের একমাত্র আয়ের উৎস হলো বিজ্ঞাপন। দয়া করে আপনার অ্যাডব্লকার বন্ধ করে সাইটটি সাপোর্ট করুন।</p>');
+  parts.push('    <button onclick="location.reload()" style="background:#ff0040; color:#fff; border:none; padding:12px 24px; border-radius:6px; cursor:pointer; font-weight:bold; font-size:16px; width:100%;">আমি অ্যাডব্লকার বন্ধ করেছি (রিলোড করুন)</button>');
   parts.push('  </div>');
   parts.push('</div>');
 
@@ -368,35 +372,39 @@ function homePage() {
   parts.push('  }catch(e){console.error("Ad error:", e);}');
   parts.push('}');
   
-  // ১০০% কাজ করা AdBlocker ডিটেকশন (ফেক গুগল অ্যাড স্ক্রিপ্ট ব্যবহার করে)
+  // ৩. পপ-আপ বারবার না আসার জন্য মোডিফাই করা ফাংশন
   parts.push('function detectAdBlocker(){');
   parts.push('  var isAdmin = localStorage.getItem("admin_token");');
-  parts.push('  if(isAdmin) return;'); // অ্যাডমিন হলে চেক করবে না
+  parts.push('  if(isAdmin) return;');
+  
+  parts.push('  if (localStorage.getItem("adblockDismissed")) { return; }'); // যদি ইউজার একবার বন্ধ করে দেয়, তবে আর দেখাবে না
   
   parts.push('  var s = document.createElement("script");');
   parts.push('  s.src = "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js";');
   parts.push('  s.async = true;');
   
-  parts.push('  s.onload = function() {');
-  parts.push('    // স্ক্রিপ্ট লোড হলে অ্যাডব্লকার নেই');
-  parts.push('  };');
+  parts.push('  var blocked = false;');
   
   parts.push('  s.onerror = function() {');
-  parts.push('    // স্ক্রিপ্ট লোড না হলে অ্যাডব্লকার আছে');
-  parts.push('    var popup = document.getElementById("adblockPopup");');
-  parts.push('    if(popup) popup.style.display = "flex";');
+  parts.push('    blocked = true;');
   parts.push('  };');
   
   parts.push('  document.head.appendChild(s);');
   
-  // ফলব্যাক টাইমার (যদি অনলোড/অনেরর ইভেন্ট কাজ না করে)
+  // পপ-আপ চেক
   parts.push('  setTimeout(function(){');
-  parts.push('    var isBlocked = !window.adsbygoogle;');
+  parts.push('    var isBlocked = !window.adsbygoogle || blocked;');
   parts.push('    if(isBlocked) {');
   parts.push('      var popup = document.getElementById("adblockPopup");');
-  parts.push('      if(popup) popup.style.display = "flex";');
+  parts.push('      if(popup) popup.style.display = "flex"; // এখানে পপ-আপটি স্ক্রিনে লক হয়ে থাকবে');
   parts.push('    }');
   parts.push('  }, 1500);');
+  parts.push('}');
+  
+  // রিলোড বাটনের কাজ
+  parts.push('function reloadPage() {');
+  parts.push('  localStorage.setItem("adblockDismissed", "true");');
+  parts.push('  location.reload();');
   parts.push('}');
   
   parts.push('function handleSearch(e){');
@@ -490,7 +498,9 @@ function watchPage(id) {
   parts.push('<title>Watch - AdultMovie</title>');
   parts.push('<style>');
   parts.push('*{margin:0;padding:0;box-sizing:border-box}');
-  parts.push('body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#eee}');
+  // বাংলা ফন্ট যোগ করা হলো
+  parts.push('@import url("https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;600;700&display=swap");');
+  parts.push('body{font-family:"Hind Siliguri", system-ui, sans-serif;background:#0f0f0f;color:#eee}');
   parts.push('header{background:#1a1a1a;padding:16px 24px;border-bottom:2px solid #ff0040;display:flex;justify-content:space-between;align-items:center}');
   parts.push('header a.logo{color:#ff0040;font-size:22px;font-weight:bold;text-decoration:none;}');
   parts.push('header a.back-btn{color:#eee;text-decoration:none;padding:8px 14px;background:#ff0040;border-radius:6px;font-size:14px}');
@@ -504,7 +514,7 @@ function watchPage(id) {
   parts.push('.fs-btn:hover{background:#e60039}');
   
   // AdBlocker Pop-up CSS
-  parts.push('.adblock-popup{display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:9999; align-items:center; justify-content:center; text-align:center;}');
+  parts.push('.adblock-popup{display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:9999; align-items:center; justify-content:center; text-align:center; flex-direction:column;}');
   parts.push('.adblock-content{background:#1c1c1c; padding:30px; border-radius:10px; border:2px solid #ff0040; max-width:450px; margin:20px; box-shadow:0 0 20px rgba(255,0,64,0.5);}');
   parts.push('.adblock-content h2{color:#ff0040; margin-bottom:15px; font-size:24px;}');
   
@@ -513,8 +523,8 @@ function watchPage(id) {
   parts.push('<div id="adblockPopup" class="adblock-popup">');
   parts.push('  <div class="adblock-content">');
   parts.push('    <h2>⚠️ AdBlocker Detected!</h2>');
-  parts.push('    <p style="margin-bottom:20px; color:#ccc; font-size:16px; line-height:1.5;">আমাদের সাইটের একমাত্র আয়ের উৎস হলো বিজ্ঞাপন। দয়া করে আপনার অ্যাডব্লকার বন্ধ করে সাইটটি সাপোর্ট করুন।</p>');
-  parts.push('    <button onclick="location.reload()" style="background:#ff0040; color:#fff; border:none; padding:12px 24px; border-radius:6px; cursor:pointer; font-weight:bold; font-size:16px;">I have disabled it (Reload)</button>');
+  parts.push('    <p style="margin-bottom:20px; color:#ccc; font-size:16px; line-height:1.6;">আমাদের সাইটের একমাত্র আয়ের উৎস হলো বিজ্ঞাপন। দয়া করে আপনার অ্যাডব্লকার বন্ধ করে সাইটটি সাপোর্ট করুন।</p>');
+  parts.push('    <button onclick="reloadPage()" style="background:#ff0040; color:#fff; border:none; padding:12px 24px; border-radius:6px; cursor:pointer; font-weight:bold; font-size:16px; width:100%;">আমি অ্যাডব্লকার বন্ধ করেছি (রিলোড করুন)</button>');
   parts.push('  </div>');
   parts.push('</div>');
 
@@ -556,33 +566,38 @@ function watchPage(id) {
   parts.push('  }');
   parts.push('}');
   
-  // ১০০% কাজ করা AdBlocker ডিটেকশন
+  // AdBlocker ডিটেকশন ফাংশন
   parts.push('function detectAdBlocker(){');
   parts.push('  var isAdmin = localStorage.getItem("admin_token");');
   parts.push('  if(isAdmin) return;');
+  
+  parts.push('  if (localStorage.getItem("adblockDismissed")) { return; }'); // ইউজার একবার বন্ধ করলে আর দেখাবে না
   
   parts.push('  var s = document.createElement("script");');
   parts.push('  s.src = "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js";');
   parts.push('  s.async = true;');
   
-  parts.push('  s.onload = function() {');
-  parts.push('    // অ্যাডব্লকার নেই');
-  parts.push('  };');
+  parts.push('  var blocked = false;');
   
   parts.push('  s.onerror = function() {');
-  parts.push('    var popup = document.getElementById("adblockPopup");');
-  parts.push('    if(popup) popup.style.display = "flex";');
+  parts.push('    blocked = true;');
   parts.push('  };');
   
   parts.push('  document.head.appendChild(s);');
   
   parts.push('  setTimeout(function(){');
-  parts.push('    var isBlocked = !window.adsbygoogle;');
+  parts.push('    var isBlocked = !window.adsbygoogle || blocked;');
   parts.push('    if(isBlocked) {');
   parts.push('      var popup = document.getElementById("adblockPopup");');
-  parts.push('      if(popup) popup.style.display = "flex";');
+  parts.push('      if(popup) popup.style.display = "flex"; // পপ-আপ স্থায়ীভাবে থাকবে');
   parts.push('    }');
   parts.push('  }, 1500);');
+  parts.push('}');
+  
+  // রিলোড বাটনের কাজ
+  parts.push('function reloadPage() {');
+  parts.push('  localStorage.setItem("adblockDismissed", "true");');
+  parts.push('  location.reload();');
   parts.push('}');
   
   parts.push('var id=new URLSearchParams(location.search).get("id");');
