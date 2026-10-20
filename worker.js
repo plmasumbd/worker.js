@@ -15,9 +15,7 @@ export default {
     if (p === "/api/ads" && request.method === "GET") return getAds(env);
     if (p === "/api/ads" && request.method === "POST") return saveAds(request, env);
     
-    // নতুন রুট: একক ভিডিওর ডাটা আনার জন্য (Not Found ফিক্স)
     if (p === "/api/movie" && request.method === "GET") return getSingleMovie(env, url);
-
     if (p === "/api/fetch-source" && request.method === "POST") return fetchSourceData(request);
 
     if (p === "/") return html(homePage());
@@ -28,7 +26,7 @@ export default {
   }
 };
 
-// ================= GET SINGLE MOVIE (Not Found Fix) =================
+// ================= GET SINGLE MOVIE =================
 async function getSingleMovie(env, url) {
   const id = url.searchParams.get("id");
   if (!id) return json({ error: "ID required" }, 400);
@@ -144,7 +142,7 @@ function autoThumb(url) {
   return "";
 }
 
-// ================= API: LIST MOVIES (Randomized) =================
+// ================= API: LIST MOVIES =================
 async function listMovies(env, url) {
   const page = parseInt(url.searchParams.get("page") || "1");
   const search = (url.searchParams.get("search") || "").toLowerCase().trim();
@@ -301,7 +299,23 @@ function homePage() {
   parts.push('.pager button:disabled{opacity:.3;cursor:not-allowed}');
   parts.push('.empty{text-align:center;padding:60px 20px;color:#666;font-size:18px;grid-column: 1 / -1;}');
   parts.push('.ad{margin:20px 0;text-align:center;overflow:hidden}');
+  
+  // AdBlocker Pop-up CSS
+  parts.push('.adblock-popup{display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:9999; align-items:center; justify-content:center; text-align:center;}');
+  parts.push('.adblock-content{background:#1c1c1c; padding:30px; border-radius:10px; border:2px solid #ff0040; max-width:400px; margin:20px; box-shadow:0 0 20px rgba(255,0,64,0.5);}');
+  parts.push('.adblock-content h2{color:#ff0040; margin-bottom:15px; font-size:24px;}');
+  
   parts.push('</style></head><body>');
+  
+  // AdBlocker Pop-up HTML
+  parts.push('<div id="adblockPopup" class="adblock-popup">');
+  parts.push('  <div class="adblock-content">');
+  parts.push('    <h2>⚠️ AdBlocker Detected!</h2>');
+  parts.push('    <p style="margin-bottom:20px; color:#ccc; font-size:16px; line-height:1.5;">আমাদের সাইটের একমাত্র আয়ের উৎস হলো বিজ্ঞাপন। দয়া করে আপনার অ্যাডব্লকার বন্ধ করে সাইটটি সাপোর্ট করুন।</p>');
+  parts.push('    <button onclick="location.reload()" style="background:#ff0040; color:#fff; border:none; padding:12px 24px; border-radius:6px; cursor:pointer; font-weight:bold; font-size:16px;">I have disabled it (Reload)</button>');
+  parts.push('  </div>');
+  parts.push('</div>');
+
   parts.push('<header>');
   parts.push('  <a href="/" class="logo">AdultMovie</a>');
   parts.push('  <div class="search-box">');
@@ -315,6 +329,10 @@ function homePage() {
   parts.push('<div id="pager" class="pager"></div>');
   parts.push('<div class="ad" id="adBot"></div>');
   parts.push('</div>');
+  
+  // হিডেন ডিভ (AdBlocker ডিটেক্ট করার জন্য)
+  parts.push('<div id="ad-bait" class="ad-banner" style="position:absolute; left:-9999px; width:10px; height:10px;"></div>');
+
   parts.push('<script>');
   parts.push('var currentPage = 1;');
   parts.push('var currentSearch = "";');
@@ -340,6 +358,9 @@ function homePage() {
   parts.push('}');
   
   parts.push('async function loadAds(){');
+  parts.push('  var isAdmin = localStorage.getItem("admin_token");');
+  parts.push('  if(isAdmin) return;');
+  
   parts.push('  try{');
   parts.push('    var r=await fetch("/api/ads");');
   parts.push('    var d=await r.json();');
@@ -348,6 +369,22 @@ function homePage() {
   parts.push('      injectAds("adBot", d.code);');
   parts.push('    }');
   parts.push('  }catch(e){console.error("Ad error:", e);}');
+  parts.push('}');
+  
+  // AdBlocker পপ-আপ দেখানোর ফাংশন
+  parts.push('function detectAdBlocker(){');
+  parts.push('  var isAdmin = localStorage.getItem("admin_token");');
+  parts.push('  if(isAdmin) return; // অ্যাডমিন হলে চেক করবে না');
+  
+  parts.push('  var bait = document.getElementById("ad-bait");');
+  parts.push('  if(!bait) return;');
+  
+  parts.push('  bait.innerHTML = \'<div class="ad-banner" style="width:10px; height:10px;"></div>\';');
+  parts.push('  var isBlocked = bait.offsetHeight === 0 || bait.clientHeight === 0 || getComputedStyle(bait).display === "none";');
+  
+  parts.push('  if (isBlocked) {');
+  parts.push('    document.getElementById("adblockPopup").style.display = "flex";');
+  parts.push('  }');
   parts.push('}');
   
   parts.push('function handleSearch(e){');
@@ -424,13 +461,14 @@ function homePage() {
   parts.push('}');
   
   parts.push('loadAds();');
+  parts.push('detectAdBlocker();');
   parts.push('load(1);');
   parts.push('<\/script>');
   parts.push('</body></html>');
   return parts.join("\n");
 }
 
-// ================= WATCH PAGE (Fixed Not Found) =================
+// ================= WATCH PAGE =================
 function watchPage(id) {
   const parts = [];
   parts.push('<!DOCTYPE html>');
@@ -452,7 +490,22 @@ function watchPage(id) {
   parts.push('.controls{display:flex;justify-content:flex-end;margin-top:10px}');
   parts.push('.fs-btn{background:#ff0040;color:#fff;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:bold;display:flex;align-items:center;gap:8px}');
   parts.push('.fs-btn:hover{background:#e60039}');
+  
+  // AdBlocker Pop-up CSS
+  parts.push('.adblock-popup{display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:9999; align-items:center; justify-content:center; text-align:center;}');
+  parts.push('.adblock-content{background:#1c1c1c; padding:30px; border-radius:10px; border:2px solid #ff0040; max-width:400px; margin:20px; box-shadow:0 0 20px rgba(255,0,64,0.5);}');
+  parts.push('.adblock-content h2{color:#ff0040; margin-bottom:15px; font-size:24px;}');
+  
   parts.push('</style></head><body>');
+  
+  parts.push('<div id="adblockPopup" class="adblock-popup">');
+  parts.push('  <div class="adblock-content">');
+  parts.push('    <h2>⚠️ AdBlocker Detected!</h2>');
+  parts.push('    <p style="margin-bottom:20px; color:#ccc; font-size:16px; line-height:1.5;">আমাদের সাইটের একমাত্র আয়ের উৎস হলো বিজ্ঞাপন। দয়া করে আপনার অ্যাডব্লকার বন্ধ করে সাইটটি সাপোর্ট করুন।</p>');
+  parts.push('    <button onclick="location.reload()" style="background:#ff0040; color:#fff; border:none; padding:12px 24px; border-radius:6px; cursor:pointer; font-weight:bold; font-size:16px;">I have disabled it (Reload)</button>');
+  parts.push('  </div>');
+  parts.push('</div>');
+
   parts.push('<header><a href="/" class="logo">AdultMovie</a><a href="/" class="back-btn">← Home</a></header>');
   parts.push('<div class="wrap">');
   parts.push('<div class="player" id="pb"></div>');
@@ -460,6 +513,10 @@ function watchPage(id) {
   parts.push('<div class="title" id="t">Loading...</div>');
   parts.push('<div class="ad" id="adBox"></div>');
   parts.push('</div>');
+  
+  // হিডেন ডিভ (AdBlocker ডিটেক্ট করার জন্য)
+  parts.push('<div id="ad-bait" class="ad-banner" style="position:absolute; left:-9999px; width:10px; height:10px;"></div>');
+
   parts.push('<script>');
   parts.push('function injectAds(id, code){');
   parts.push('  var c=document.getElementById(id);');
@@ -478,6 +535,7 @@ function watchPage(id) {
   parts.push('  });');
   parts.push('  sc.forEach(function(s){c.appendChild(s);});');
   parts.push('}');
+  
   parts.push('function openFullscreen() {');
   parts.push('  var elem = document.getElementById("pb");');
   parts.push('  if (elem.requestFullscreen) {');
@@ -488,9 +546,25 @@ function watchPage(id) {
   parts.push('    elem.msRequestFullscreen();');
   parts.push('  }');
   parts.push('}');
+  
+  // AdBlocker পপ-আপ দেখানোর ফাংশন
+  parts.push('function detectAdBlocker(){');
+  parts.push('  var isAdmin = localStorage.getItem("admin_token");');
+  parts.push('  if(isAdmin) return;');
+  
+  parts.push('  var bait = document.getElementById("ad-bait");');
+  parts.push('  if(!bait) return;');
+  
+  parts.push('  bait.innerHTML = \'<div class="ad-banner" style="width:10px; height:10px;"></div>\';');
+  parts.push('  var isBlocked = bait.offsetHeight === 0 || bait.clientHeight === 0 || getComputedStyle(bait).display === "none";');
+  
+  parts.push('  if (isBlocked) {');
+  parts.push('    document.getElementById("adblockPopup").style.display = "flex";');
+  parts.push('  }');
+  parts.push('}');
+  
   parts.push('var id=new URLSearchParams(location.search).get("id");');
   
-  // নতুন ফাংশন: সরাসরি নির্দিষ্ট আইডি খুঁজবে
   parts.push('async function go(){');
   parts.push('  if(!id){document.getElementById("t").textContent="ID not provided";return}');
   parts.push('  try {');
@@ -515,15 +589,22 @@ function watchPage(id) {
   parts.push('      f.referrerPolicy="no-referrer";');
   parts.push('      pb.appendChild(f);');
   parts.push('    }');
-  parts.push('    try{');
-  parts.push('      var ar=await fetch("/api/ads");');
-  parts.push('      var ad=await ar.json();');
-  parts.push('      if(ad.code&&ad.code.trim())injectAds("adBox", ad.code);');
-  parts.push('    }catch(e){}');
+  
+  parts.push('    var isAdmin = localStorage.getItem("admin_token");');
+  parts.push('    if(!isAdmin){');
+  parts.push('      try{');
+  parts.push('        var ar=await fetch("/api/ads");');
+  parts.push('        var ad=await ar.json();');
+  parts.push('        if(ad.code&&ad.code.trim())injectAds("adBox", ad.code);');
+  parts.push('      }catch(e){}');
+  parts.push('    }');
+  
   parts.push('  } catch(err) {');
   parts.push('    document.getElementById("t").textContent="Video Not Found";');
   parts.push('  }');
   parts.push('}');
+  
+  parts.push('detectAdBlocker();');
   parts.push('go();');
   parts.push('<\/script>');
   parts.push('</body></html>');
@@ -638,7 +719,7 @@ function adminPage() {
   parts.push('<div id="ta" class="hidden">');
   parts.push('<div class="card">');
   parts.push('<h2>Adsterra Ad Code</h2>');
-  parts.push('<p class="hint">Ad code paste করো। Home ও Watch page এ auto বসবে।</p>');
+  parts.push('<p class="hint">Ad code paste করো। Home ও Watch page এ auto বসবে। (নোট: অ্যাডমিন হিসেবে লগইন থাকলে আপনার কাছে অ্যাড দেখাবে না)</p>');
   parts.push('<label>Ad Code</label>');
   parts.push('<textarea id="ads" style="min-height:200px"></textarea>');
   parts.push('<button class="primary" id="adsSaveBtn">Save</button>');
