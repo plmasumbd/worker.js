@@ -14,8 +14,8 @@ export default {
     if (p === "/api/check-auth" && request.method === "GET") return checkAuth(request);
     if (p === "/api/ads" && request.method === "GET") return getAds(env);
     if (p === "/api/ads" && request.method === "POST") return saveAds(request, env);
-
-    // ✅ NEW: Ad Redirect URL endpoints
+    
+    // Ad Redirect endpoints
     if (p === "/api/ad-redirect" && request.method === "GET") return getAdRedirect(env);
     if (p === "/api/ad-redirect" && request.method === "POST") return saveAdRedirect(request, env);
 
@@ -34,11 +34,11 @@ export default {
 async function getSingleMovie(env, url) {
   const id = url.searchParams.get("id");
   if (!id) return json({ error: "ID required" }, 400);
-
+  
   const raw = await env.MOVIES.get("movie_list");
   let list = raw ? JSON.parse(raw) : [];
   const movie = list.find(m => m.id === id);
-
+  
   if (!movie) return json({ error: "Not found" }, 404);
   return json({ success: true, movie: movie });
 }
@@ -61,7 +61,7 @@ async function fetchSourceData(request) {
           "Accept-Language": "en-US,en;q=0.5"
         }
       });
-
+      
       if (res.ok) {
         htmlText = await res.text();
         if (!htmlText.includes('video_alt_url') && !htmlText.includes('video_url')) {
@@ -104,8 +104,8 @@ async function fetchSourceData(request) {
     let preview_url = getMatch('preview_url') || getMatch('preview_url1');
     let video_url = getMatch('video_alt_url') || getMatch('video_url');
 
-    if (!video_url) {
-      return json({ error: "Could not find video link. Site might block it." }, 400);
+    if(!video_url) {
+       return json({ error: "Could not find video link. Site might block it." }, 400);
     }
 
     return json({
@@ -150,7 +150,7 @@ function autoThumb(url) {
 async function listMovies(env, url) {
   const page = parseInt(url.searchParams.get("page") || "1");
   const search = (url.searchParams.get("search") || "").toLowerCase().trim();
-
+  
   const raw = await env.MOVIES.get("movie_list");
   let list = raw ? JSON.parse(raw) : [];
 
@@ -174,24 +174,24 @@ async function addMovie(request, env) {
   if (auth !== ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
   const b = await request.json();
   if (!b.title || !b.videoUrl) return json({ error: "Missing Title or Video URL" }, 400);
-
+  
   const raw = await env.MOVIES.get("movie_list");
   const list = raw ? JSON.parse(raw) : [];
-
+  
   const vurl = extractSrc(b.videoUrl);
   let thumb = (b.thumbnail || "").trim();
   if (!thumb) thumb = autoThumb(vurl);
-
+  
   const movie = {
-    id: b.videoId || crypto.randomUUID(),
+    id: b.videoId || crypto.randomUUID(), 
     title: b.title.trim(),
     videoUrl: vurl.trim(),
     thumbnail: thumb,
     createdAt: Date.now()
   };
-
+  
   if (b.videoId && list.find(m => m.id === b.videoId)) {
-    return json({ error: "This video is already added!" }, 400);
+     return json({ error: "This video is already added!" }, 400);
   }
 
   list.push(movie);
@@ -258,13 +258,11 @@ async function saveAds(request, env) {
   return json({ success: true });
 }
 
-// ✅ NEW: Ad Redirect URL — GET
 async function getAdRedirect(env) {
   const raw = await env.MOVIES.get("ad_redirect_url");
   return json({ url: raw || "" });
 }
 
-// ✅ NEW: Ad Redirect URL — SAVE
 async function saveAdRedirect(request, env) {
   const auth = request.headers.get("X-Admin-Password");
   if (auth !== ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
@@ -349,7 +347,7 @@ function homePage() {
   parts.push('<script>');
   parts.push('var currentPage = 1;');
   parts.push('var currentSearch = "";');
-  parts.push('var adRedirectUrl = "";');  // ✅ ক্যাশে রাখা হবে
+  parts.push('var adRedirectUrl = "";');
 
   parts.push('function injectAds(containerId, code){');
   parts.push('  var container=document.getElementById(containerId);');
@@ -372,8 +370,10 @@ function homePage() {
   parts.push('}');
 
   parts.push('async function loadAds(){');
-  parts.push('  var isAdmin = localStorage.getItem("admin_token");');
-  parts.push('  if(isAdmin) return;');
+  parts.push('  try {');
+  parts.push('    var isAdmin = localStorage.getItem("admin_token");');
+  parts.push('    if(isAdmin) return;');
+  parts.push('  } catch(e) {}');
   parts.push('  try{');
   parts.push('    var r=await fetch("/api/ads");');
   parts.push('    var d=await r.json();');
@@ -384,7 +384,6 @@ function homePage() {
   parts.push('  }catch(e){console.error("Ad error:", e);}');
   parts.push('}');
 
-  // ✅ NEW: Ad redirect URL pre-load
   parts.push('async function preloadAdRedirect(){');
   parts.push('  try{');
   parts.push('    var r = await fetch("/api/ad-redirect");');
@@ -393,7 +392,6 @@ function homePage() {
   parts.push('  }catch(e){}');
   parts.push('}');
 
-  // ✅ NEW: redirect to ad (or fallback home)
   parts.push('function redirectToAd(){');
   parts.push('  if(adRedirectUrl && adRedirectUrl.length > 0){');
   parts.push('    window.location.replace(adRedirectUrl);');
@@ -402,18 +400,17 @@ function homePage() {
   parts.push('  }');
   parts.push('}');
 
-  // ✅ NEW: Movie open — new tab এ watch, old tab এ ad
   parts.push('function openMovie(watchUrl){');
-  parts.push('  // ১. watch page নতুন tab এ (sync, popup blocker-safe)');
   parts.push('  window.open(watchUrl, "_blank");');
-  parts.push('  // ২. current tab কে ad এ redirect');
   parts.push('  redirectToAd();');
   parts.push('}');
 
   parts.push('function detectAdBlocker(){');
-  parts.push('  var isAdmin = localStorage.getItem("admin_token");');
-  parts.push('  if(isAdmin) return;');
-  parts.push('  if (localStorage.getItem("adblockDismissed")) { return; }');
+  parts.push('  try {');
+  parts.push('    var isAdmin = localStorage.getItem("admin_token");');
+  parts.push('    if(isAdmin) return;');
+  parts.push('    if (localStorage.getItem("adblockDismissed")) { return; }');
+  parts.push('  } catch(e) {}');
   parts.push('  var s = document.createElement("script");');
   parts.push('  s.src = "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js";');
   parts.push('  s.async = true;');
@@ -430,15 +427,14 @@ function homePage() {
   parts.push('}');
 
   parts.push('function reloadPage() {');
-  parts.push('  localStorage.setItem("adblockDismissed", "true");');
+  parts.push('  try { localStorage.setItem("adblockDismissed", "true"); } catch(e) {}');
   parts.push('  location.reload();');
   parts.push('}');
 
   parts.push('function handleSearch(e){');
-  parts.push('  if(e.key === "Enter"){');
-  parts.push('    triggerSearch();');
-  parts.push('  }');
+  parts.push('  if(e.key === "Enter"){ triggerSearch(); }');
   parts.push('}');
+  
   parts.push('function triggerSearch(){');
   parts.push('  var q = document.getElementById("searchInput").value.trim();');
   parts.push('  currentSearch = q;');
@@ -450,30 +446,34 @@ function homePage() {
   parts.push('  currentPage = p;');
   parts.push('  var url = "/api/movies?page=" + p;');
   parts.push('  if(currentSearch) url += "&search=" + encodeURIComponent(currentSearch);');
-  parts.push('  var r=await fetch(url);');
-  parts.push('  var d=await r.json();');
-  parts.push('  var g=document.getElementById("grid");');
-  parts.push('  g.innerHTML="");');
-  parts.push('  if(!d.items.length){');
-  parts.push('    g.innerHTML=\'<div class="empty">No videos found!</div>\';');
-  parts.push('    document.getElementById("pager").innerHTML="";');
-  parts.push('    return;');
-  parts.push('  }');
-  // ✅ পরিবর্তিত card rendering
-  parts.push('  d.items.forEach(function(m){');
-  parts.push('    var a=document.createElement("a");');
-  parts.push('    a.className="card";');
-  parts.push('    a.href="/watch?id="+m.id;');
-  parts.push('    a.setAttribute("data-watch", "/watch?id="+m.id);');
-  parts.push('    var s=m.thumbnail?("background-image:url(\'" + m.thumbnail + "\')"):"";');
-  parts.push('    a.innerHTML=\'<div class="thumb" style="\'+s+\'"><div class="play">▶</div></div><div class="info"><h3>\'+esc(m.title)+\'</h3></div>\';');
-  parts.push('    a.addEventListener("click", function(ev){');
-  parts.push('      ev.preventDefault();');
-  parts.push('      openMovie(a.getAttribute("data-watch"));');
+  parts.push('  try {');
+  parts.push('    var r=await fetch(url);');
+  parts.push('    var d=await r.json();');
+  parts.push('    var g=document.getElementById("grid");');
+  parts.push('    g.innerHTML="";');
+  parts.push('    if(!d.items || !d.items.length){');
+  parts.push('      g.innerHTML=\'<div class="empty">No videos found!</div>\';');
+  parts.push('      document.getElementById("pager").innerHTML="";');
+  parts.push('      return;');
+  parts.push('    }');
+  parts.push('    d.items.forEach(function(m){');
+  parts.push('      var a=document.createElement("a");');
+  parts.push('      a.className="card";');
+  parts.push('      a.href="/watch?id="+m.id;');
+  parts.push('      a.setAttribute("data-watch", "/watch?id="+m.id);');
+  parts.push('      var s=m.thumbnail?("background-image:url(\'" + m.thumbnail + "\')"):"";');
+  parts.push('      a.innerHTML=\'<div class="thumb" style="\'+s+\'"><div class="play">▶</div></div><div class="info"><h3>\'+esc(m.title)+\'</h3></div>\';');
+  parts.push('      a.addEventListener("click", function(ev){');
+  parts.push('        ev.preventDefault();');
+  parts.push('        openMovie(a.getAttribute("data-watch"));');
+  parts.push('      });');
+  parts.push('      g.appendChild(a);');
   parts.push('    });');
-  parts.push('    g.appendChild(a);');
-  parts.push('  });');
-  parts.push('  pager(d.page,d.totalPages);');
+  parts.push('    pager(d.page,d.totalPages);');
+  parts.push('  } catch(err) {');
+  parts.push('    console.error(err);');
+  parts.push('    document.getElementById("grid").innerHTML = \'<div class="empty">Error loading videos. Please refresh.</div>\';');
+  parts.push('  }');
   parts.push('}');
 
   parts.push('function pager(c,t){');
@@ -510,7 +510,7 @@ function homePage() {
   parts.push('}');
 
   parts.push('loadAds();');
-  parts.push('preloadAdRedirect();');   // ✅ ad url ক্যাশে
+  parts.push('preloadAdRedirect();');
   parts.push('detectAdBlocker();');
   parts.push('load(1);');
   parts.push('<\/script>');
@@ -589,9 +589,11 @@ function watchPage(id) {
   parts.push('}');
 
   parts.push('function detectAdBlocker(){');
-  parts.push('  var isAdmin = localStorage.getItem("admin_token");');
-  parts.push('  if(isAdmin) return;');
-  parts.push('  if (localStorage.getItem("adblockDismissed")) { return; }');
+  parts.push('  try {');
+  parts.push('    var isAdmin = localStorage.getItem("admin_token");');
+  parts.push('    if(isAdmin) return;');
+  parts.push('    if (localStorage.getItem("adblockDismissed")) { return; }');
+  parts.push('  } catch(e) {}');
   parts.push('  var s = document.createElement("script");');
   parts.push('  s.src = "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js";');
   parts.push('  s.async = true;');
@@ -608,7 +610,7 @@ function watchPage(id) {
   parts.push('}');
 
   parts.push('function reloadPage() {');
-  parts.push('  localStorage.setItem("adblockDismissed", "true");');
+  parts.push('  try { localStorage.setItem("adblockDismissed", "true"); } catch(e) {}');
   parts.push('  location.reload();');
   parts.push('}');
 
@@ -637,14 +639,14 @@ function watchPage(id) {
   parts.push('      f.referrerPolicy="no-referrer";');
   parts.push('      pb.appendChild(f);');
   parts.push('    }');
-  parts.push('    var isAdmin = localStorage.getItem("admin_token");');
-  parts.push('    if(!isAdmin){');
-  parts.push('      try{');
+  parts.push('    try {');
+  parts.push('      var isAdmin = localStorage.getItem("admin_token");');
+  parts.push('      if(!isAdmin){');
   parts.push('        var ar=await fetch("/api/ads");');
   parts.push('        var ad=await ar.json();');
   parts.push('        if(ad.code&&ad.code.trim())injectAds("adBox", ad.code);');
-  parts.push('      }catch(e){}');
-  parts.push('    }');
+  parts.push('      }');
+  parts.push('    } catch(e) {}');
   parts.push('  } catch(err) {');
   parts.push('    document.getElementById("t").textContent="Video Not Found";');
   parts.push('  }');
@@ -719,7 +721,7 @@ function adminPage() {
   parts.push('<div class="tabs">');
   parts.push('<button id="t1" class="active" data-tab="m">Movies</button>');
   parts.push('<button id="t2" data-tab="a">Ads</button>');
-  parts.push('<button id="t3" data-tab="r">Ad Redirect</button>');  // ✅ NEW tab
+  parts.push('<button id="t3" data-tab="r">Ad Redirect</button>');
   parts.push('</div>');
 
   parts.push('<div id="tm">');
@@ -775,7 +777,6 @@ function adminPage() {
   parts.push('</div>');
   parts.push('</div>');
 
-  // ✅ NEW: Ad Redirect tab content
   parts.push('<div id="tr" class="hidden">');
   parts.push('<div class="card ad-redirect-box">');
   parts.push('<h2 style="color:#c060ff;">🎯 Ad Direct Redirect URL</h2>');
@@ -802,7 +803,7 @@ function adminPage() {
   parts.push('  $("scrapeBtn").onclick=autoFetchWithPreview;');
   parts.push('  $("openLiveBtn").onclick=openLivePage;');
   parts.push('  $("parseBtn").onclick=parseSourceCode;');
-  parts.push('  $("adRedirectSaveBtn").onclick=saveAdRedirect;');  // ✅ NEW
+  parts.push('  $("adRedirectSaveBtn").onclick=saveAdRedirect;');
   parts.push('  document.querySelectorAll("[data-tab]").forEach(function(b){');
   parts.push('    b.onclick=function(){tab(b.getAttribute("data-tab"))};');
   parts.push('  });');
@@ -1027,7 +1028,6 @@ function adminPage() {
   parts.push('  setTimeout(function(){m.classList.remove("show")},2500);');
   parts.push('}');
 
-  // ✅ NEW: Ad Redirect load & save
   parts.push('async function loadAdRedirect(){');
   parts.push('  try{');
   parts.push('    var r = await fetch("/api/ad-redirect");');
