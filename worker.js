@@ -15,7 +15,7 @@ export default {
     if (p === "/api/ads" && request.method === "GET") return getAds(env);
     if (p === "/api/ads" && request.method === "POST") return saveAds(request, env);
     
-    // Ad Redirect & Direct Link endpoints
+    // Ad Redirect endpoints
     if (p === "/api/ad-redirect" && request.method === "GET") return getAdRedirect(env);
     if (p === "/api/ad-redirect" && request.method === "POST") return saveAdRedirect(request, env);
 
@@ -379,8 +379,10 @@ function homePage() {
   parts.push('    var r=await fetch("/api/ads");');
   parts.push('    var d=await r.json();');
   parts.push('    if(d.code&&d.code.trim()){');
-  parts.push('      injectAds("adTop", d.code);');
-  parts.push('      injectAds("adBot", d.code);');
+  parts.push('      if(!d.code.startsWith("http")){');
+  parts.push('        injectAds("adTop", d.code);');
+  parts.push('        injectAds("adBot", d.code);');
+  parts.push('      }');
   parts.push('    }');
   parts.push('  }catch(e){console.error("Ad error:", e);}');
   parts.push('}');
@@ -421,8 +423,9 @@ function homePage() {
 
   parts.push('function openMovie(watchUrl){');
   parts.push('  if(directLink){');
-  parts.push('    // পুরনো ট্যাবে ডিরেক্ট লিংক ৫ সেকেন্ডের জন্য লোড হবে');
-  parts.push('    var oldTab = window.open(directLink, "_self");');
+  parts.push('    // ১. পুরনো ট্যাবে ডিরেক্ট লিংক লোড হবে');
+  parts.push('    window.location.href = directLink;');
+  parts.push('    // ২. ৫ সেকেন্ড পর ভিডিও পেজে চলে যাবে');
   parts.push('    setTimeout(function(){');
   parts.push('      window.location.href = watchUrl;');
   parts.push('    }, 5000);');
@@ -866,7 +869,7 @@ function adminPage() {
   parts.push('<div id="ta" class="hidden">');
   parts.push('<div class="card">');
   parts.push('<h2>Ad Code or Direct Link</h2>');
-  parts.push('<p class="hint">Ad code paste করো অথবা সরাসরি কোনো ডিরেক্ট লিংক (যেমন: https://... ) দাও। Watch page এ ৫ সেকেন্ডের পপআপে এটি দেখাবে। (নোট: Social Bar কোড ইতিমধ্যেই সাইটে যুক্ত করা আছে)</p>');
+  parts.push('<p class="hint">Ad code paste করো অথবা সরাসরি কোনো ডিরেক্ট লিংক (যেমন: https://... ) দাও। ইউজার কার্ডে ক্লিক করলে ৫ সেকেন্ডের জন্য এটি ওপেন হবে। (নোট: Social Bar কোড ইতিমধ্যেই সাইটে যুক্ত করা আছে)</p>');
   parts.push('<label>Ad Code / Direct Link</label>');
   parts.push('<textarea id="ads" style="min-height:200px"></textarea>');
   parts.push('<button class="primary" id="adsSaveBtn">Save</button>');
@@ -877,7 +880,7 @@ function adminPage() {
   parts.push('<div id="tr" class="hidden">');
   parts.push('<div class="card ad-redirect-box">');
   parts.push('<h2 style="color:#c060ff;">🎯 Ad Direct Redirect URL (দিনে ১ বার)</h2>');
-  parts.push('<p class="hint" style="margin-bottom:10px; color:#ccccff;">এই URL-টাই ব্যবহার হবে যখন user কোনো movie card-এ ক্লিক করবে। Movie watch page নতুন tab-এ খুলবে, আর পুরনো tab দিনে একবার এই ad link-এ redirect হবে।</p>');
+  parts.push('<p class="hint" style="margin-bottom:10px; color:#ccccff;">এই URL-টাই ব্যবহার হবে যখন user কোনো movie card-এ ক্লিক করবে এবং উপরে ডিরেক্ট লিংক দেওয়া না থাকবে। Movie watch page নতুন tab-এ খুলবে, আর পুরনো tab দিনে একবার এই ad link-এ redirect হবে।</p>');
   parts.push('<label>Ad Direct Link</label>');
   parts.push('<input type="text" id="adRedirectInput" placeholder="https://your-ad-direct-link.com/xyz">');
   parts.push('<button class="primary" id="adRedirectSaveBtn" style="background:#c060ff;">Save</button>');
