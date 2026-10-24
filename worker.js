@@ -13,15 +13,11 @@ export default {
     if (p === "/api/login" && request.method === "POST") return login(request);
     if (p === "/api/check-auth" && request.method === "GET") return checkAuth(request);
     
-    // APIs for Ads, Interval Link, and Redirect
     if (p === "/api/ads" && request.method === "GET") return getAds(env);
     if (p === "/api/ads" && request.method === "POST") return saveAds(request, env);
     
     if (p === "/api/interval-link" && request.method === "GET") return getIntervalLink(env);
     if (p === "/api/interval-link" && request.method === "POST") return saveIntervalLink(request, env);
-
-    if (p === "/api/ad-redirect" && request.method === "GET") return getAdRedirect(env);
-    if (p === "/api/ad-redirect" && request.method === "POST") return saveAdRedirect(request, env);
 
     if (p === "/api/movie" && request.method === "GET") return getSingleMovie(env, url);
     if (p === "/api/fetch-source" && request.method === "POST") return fetchSourceData(request);
@@ -275,19 +271,6 @@ async function saveIntervalLink(request, env) {
   return json({ success: true });
 }
 
-async function getAdRedirect(env) {
-  const raw = await env.MOVIES.get("ad_redirect_url");
-  return json({ url: raw || "" });
-}
-
-async function saveAdRedirect(request, env) {
-  const auth = request.headers.get("X-Admin-Password");
-  if (auth !== ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
-  const b = await request.json();
-  await env.MOVIES.put("ad_redirect_url", (b.url || "").trim());
-  return json({ success: true });
-}
-
 function json(data, status) {
   return new Response(JSON.stringify(data), {
     status: status || 200,
@@ -305,7 +288,7 @@ function html(s) {
 function homePage() {
   const parts = [];
   parts.push('<!DOCTYPE html>');
-  parts.push('<html lang="bn"><head>');
+  parts.push('<html lang="en"><head>');
   parts.push('<meta charset="UTF-8">');
   parts.push('<meta name="viewport" content="width=device-width,initial-scale=1">');
   parts.push('<title>AdultMovie</title>');
@@ -342,8 +325,8 @@ function homePage() {
   parts.push('<div id="adblockPopup" class="adblock-popup">');
   parts.push('  <div class="adblock-content">');
   parts.push('    <h2>⚠️ AdBlocker Detected!</h2>');
-  parts.push('    <p style="margin-bottom:20px; color:#ccc; font-size:16px; line-height:1.6;">আমাদের সাইটের একমাত্র আয়ের উৎস হলো বিজ্ঞাপন। দয়া করে আপনার অ্যাডব্লকার বন্ধ করে সাইটটি সাপোর্ট করুন।</p>');
-  parts.push('    <button onclick="location.reload()" style="background:#ff0040; color:#fff; border:none; padding:12px 24px; border-radius:6px; cursor:pointer; font-weight:bold; font-size:16px; width:100%;">আমি অ্যাডব্লকার বন্ধ করেছি (রিলোড করুন)</button>');
+  parts.push('    <p style="margin-bottom:20px; color:#ccc; font-size:16px; line-height:1.6;">Our only source of income is advertisements. Please disable your adblocker to support this site.</p>');
+  parts.push('    <button onclick="reloadPage()" style="background:#ff0040; color:#fff; border:none; padding:12px 24px; border-radius:6px; cursor:pointer; font-weight:bold; font-size:16px; width:100%;">I Have Disabled My AdBlocker (Reload)</button>');
   parts.push('  </div>');
   parts.push('</div>');
 
@@ -399,24 +382,7 @@ function homePage() {
   parts.push('}');
 
   parts.push('function handleCardClick(watchUrl){');
-  parts.push('  var isAdmin = localStorage.getItem("admin_token");');
-  parts.push('  if(isAdmin) { window.location.href = watchUrl; return; }');
-  
-  parts.push('  var today = new Date().toDateString();');
-  parts.push('  var lastVisit = localStorage.getItem("last_ad_redirect_date");');
-  
-  parts.push('  if(lastVisit !== today) {');
-  parts.push('    localStorage.setItem("last_ad_redirect_date", today);');
-  parts.push('    fetch("/api/ad-redirect").then(r=>r.json()).then(d=>{');
-  parts.push('      if(d.url && d.url.length > 0) {');
-  parts.push('        window.location.replace(d.url);');
-  parts.push('      } else {');
-  parts.push('        window.location.href = watchUrl;');
-  parts.push('      }');
-  parts.push('    }).catch(()=>{ window.location.href = watchUrl; });');
-  parts.push('  } else {');
-  parts.push('    window.location.href = watchUrl;');
-  parts.push('  }');
+  parts.push('  window.location.href = watchUrl;');
   parts.push('}');
 
   parts.push('function detectAdBlocker(){');
@@ -527,7 +493,7 @@ function homePage() {
 function watchPage(id) {
   const parts = [];
   parts.push('<!DOCTYPE html>');
-  parts.push('<html lang="bn"><head>');
+  parts.push('<html lang="en"><head>');
   parts.push('<meta charset="UTF-8">');
   parts.push('<meta name="viewport" content="width=device-width,initial-scale=1">');
   parts.push('<title>Watch - AdultMovie</title>');
@@ -551,11 +517,13 @@ function watchPage(id) {
   parts.push('.adblock-content{background:#1c1c1c; padding:30px; border-radius:10px; border:2px solid #ff0040; max-width:450px; margin:20px; box-shadow:0 0 20px rgba(255,0,64,0.5);}');
   parts.push('.adblock-content h2{color:#ff0040; margin-bottom:15px; font-size:24px;}');
   
-  parts.push('.interstitial-modal{display:flex; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:10000; flex-direction:column; align-items:center; justify-content:center;}');
-  parts.push('.interstitial-box{background:#1c1c1c; width:90%; max-width:700px; padding:20px; border-radius:12px; border:2px solid #ff0040; text-align:center; position:relative; box-shadow:0 0 30px rgba(255,0,64,0.4);}');
-  parts.push('.interstitial-box h3{color:#fff; margin-bottom:15px; font-size:18px;}');
-  parts.push('.ad-container{min-height:250px; display:flex; align-items:center; justify-content:center; background:#000; border-radius:8px; overflow:hidden; margin-bottom:20px;}');
-  parts.push('.skip-btn{background:#333; color:#fff; border:none; padding:12px 30px; border-radius:8px; font-size:16px; font-weight:bold; cursor:not-allowed; transition:0.3s; width:100%; max-width:300px;}');
+  // BIGGER INTERVAL MODAL
+  parts.push('.interstitial-modal{display:flex; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:10000; flex-direction:column; align-items:center; justify-content:center; padding:15px;}');
+  parts.push('.interstitial-box{background:#1c1c1c; width:96%; max-width:1100px; height:92vh; max-height:900px; padding:20px; border-radius:12px; border:2px solid #ff0040; text-align:center; position:relative; box-shadow:0 0 30px rgba(255,0,64,0.4); display:flex; flex-direction:column;}');
+  parts.push('.interstitial-box h3{color:#fff; margin-bottom:15px; font-size:20px; flex-shrink:0;}');
+  parts.push('.ad-container{flex:1; min-height:400px; display:flex; align-items:center; justify-content:center; background:#000; border-radius:8px; overflow:hidden; margin-bottom:15px;}');
+  parts.push('.ad-container iframe{width:100%; height:100%; border:0;}');
+  parts.push('.skip-btn{background:#333; color:#fff; border:none; padding:14px 30px; border-radius:8px; font-size:17px; font-weight:bold; cursor:not-allowed; transition:0.3s; width:100%; max-width:400px; flex-shrink:0; align-self:center;}');
   parts.push('.skip-btn.active{background:#ff0040; cursor:pointer; box-shadow:0 0 15px rgba(255,0,64,0.5);}');
   
   parts.push('</style></head><body>');
@@ -563,16 +531,16 @@ function watchPage(id) {
   parts.push('<div id="adblockPopup" class="adblock-popup">');
   parts.push('  <div class="adblock-content">');
   parts.push('    <h2>⚠️ AdBlocker Detected!</h2>');
-  parts.push('    <p style="margin-bottom:20px; color:#ccc; font-size:16px; line-height:1.6;">আমাদের সাইটের একমাত্র আয়ের উৎস হলো বিজ্ঞাপন। দয়া করে আপনার অ্যাডব্লকার বন্ধ করে সাইটটি সাপোর্ট করুন।</p>');
-  parts.push('    <button onclick="reloadPage()" style="background:#ff0040; color:#fff; border:none; padding:12px 24px; border-radius:6px; cursor:pointer; font-weight:bold; font-size:16px; width:100%;">আমি অ্যাডব্লকার বন্ধ করেছি (রিলোড করুন)</button>');
+  parts.push('    <p style="margin-bottom:20px; color:#ccc; font-size:16px; line-height:1.6;">Our only source of income is advertisements. Please disable your adblocker to support this site.</p>');
+  parts.push('    <button onclick="reloadPage()" style="background:#ff0040; color:#fff; border:none; padding:12px 24px; border-radius:6px; cursor:pointer; font-weight:bold; font-size:16px; width:100%;">I Have Disabled My AdBlocker (Reload)</button>');
   parts.push('  </div>');
   parts.push('</div>');
 
   parts.push('<div id="interstitialModal" class="interstitial-modal">');
   parts.push('  <div class="interstitial-box">');
-  parts.push('    <h3>আপনার ভিডিওটি লোড হচ্ছে... অনুগ্রহ করে অপেক্ষা করুন</h3>');
+  parts.push('    <h3>Your video is loading... Please wait</h3>');
   parts.push('    <div class="ad-container" id="interstitialAdBox"></div>');
-  parts.push('    <button id="skipBtn" class="skip-btn" disabled>অপেক্ষা করুন (৫)</button>');
+  parts.push('    <button id="skipBtn" class="skip-btn" disabled>Please Wait (5)</button>');
   parts.push('  </div>');
   parts.push('</div>');
 
@@ -670,31 +638,27 @@ function watchPage(id) {
   parts.push('    var ar=await fetch("/api/interval-link");');
   parts.push('    var ad=await ar.json();');
   parts.push('    if(ad.url && ad.url.trim()){');
-  parts.push('      adBox.innerHTML = \'<iframe src="\'+ad.url+\'" style="width:100%; height:100%; border:0;"></iframe>\';');
+  parts.push('      adBox.innerHTML = \'<iframe src="\'+ad.url+\'" allowfullscreen></iframe>\';');
   parts.push('    } else {');
   parts.push('      adBox.innerHTML = "<p style=\'color:#666\'>Video is loading...</p>";');
   parts.push('    }');
   parts.push('  }catch(e){}');
   
   parts.push('  var timeLeft = 5;');
-  parts.push('  skipBtn.textContent = "অপেক্ষা করুন (" + timeLeft + ")";');
+  parts.push('  skipBtn.textContent = "Please Wait (" + timeLeft + ")";');
   parts.push('  var timer = setInterval(function(){');
   parts.push('    timeLeft--;');
   parts.push('    if(timeLeft > 0){');
-  parts.push('      skipBtn.textContent = "অপেক্ষা করুন (" + timeLeft + ")";');
+  parts.push('      skipBtn.textContent = "Please Wait (" + timeLeft + ")";');
   parts.push('    } else {');
   parts.push('      clearInterval(timer);');
-  parts.push('      skipBtn.textContent = "ভিডিও দেখুন ▶";');
+  parts.push('      skipBtn.textContent = "Watch Video ▶";');
   parts.push('      skipBtn.classList.add("active");');
   parts.push('      skipBtn.disabled = false;');
   parts.push('      skipBtn.onclick = function(){');
   parts.push('        document.getElementById("interstitialModal").style.display = "none";');
   parts.push('        playVideo();');
   parts.push('      };');
-  parts.push('      setTimeout(function(){');
-  parts.push('        document.getElementById("interstitialModal").style.display = "none";');
-  parts.push('        playVideo();');
-  parts.push('      }, 1000);');
   parts.push('    }');
   parts.push('  }, 1000);');
   parts.push('}');
@@ -740,7 +704,7 @@ function watchPage(id) {
 function adminPage() {
   const parts = [];
   parts.push('<!DOCTYPE html>');
-  parts.push('<html lang="bn"><head>');
+  parts.push('<html lang="en"><head>');
   parts.push('<meta charset="UTF-8">');
   parts.push('<meta name="viewport" content="width=device-width,initial-scale=1">');
   parts.push('<title>Admin - AdultMovie</title>');
@@ -798,13 +762,12 @@ function adminPage() {
   parts.push('<button id="t1" class="active" data-tab="m">Movies</button>');
   parts.push('<button id="t2" data-tab="ad">Ad Code</button>');
   parts.push('<button id="t3" data-tab="il">Interval Link</button>');
-  parts.push('<button id="t4" data-tab="rd">Ad Redirect</button>');
   parts.push('</div>');
   
   parts.push('<div id="tm">');
   parts.push('<div class="card auto-box">');
   parts.push('<h2 style="color:#fff;margin-bottom:10px;">⚡ Auto Extract from URL</h2>');
-  parts.push('<p class="hint" style="margin-bottom:10px;">লিংক দিন এবং ডাটা এক্সট্রাক্ট করুন।</p>');
+  parts.push('<p class="hint" style="margin-bottom:10px;">Enter a link and extract the data automatically.</p>');
   parts.push('<input type="text" id="scrapeUrl" placeholder="https://example.com/video-page">');
   parts.push('<div style="display:flex; gap:10px; flex-wrap:wrap;">');
   parts.push('  <button class="primary" style="background:#ff9800; margin-top:10px;" id="scrapeBtn">Open & Extract</button>');
@@ -819,7 +782,7 @@ function adminPage() {
 
   parts.push('<div class="card paste-box">');
   parts.push('<h2 style="color:#00c853;margin-bottom:10px;">📋 Smart Paste (Manual Source Code)</h2>');
-  parts.push('<p class="hint" style="margin-bottom:10px;color:#aaddff;">পেজটি নিজে ওপেন করুন -> View Source করুন -> নিচের লাইনগুলো কপি করে এখানে পেস্ট করুন।</p>');
+  parts.push('<p class="hint" style="margin-bottom:10px;color:#aaddff;">Open the page yourself -> View Source -> copy the lines below and paste them here.</p>');
   parts.push('<textarea id="sourceCode" placeholder="video_title: \'Example Title\',&#10;video_id: \'1234\',&#10;preview_url: \'https://image.jpg\',&#10;video_alt_url: \'https://video.mp4\'" style="min-height:120px;"></textarea>');
   parts.push('<button class="primary" style="background:#00c853; margin-top:10px;" id="parseBtn">Extract & Fill Data</button>');
   parts.push('<div id="pm" class="msg" style="margin-top:10px;"></div>');
@@ -846,7 +809,7 @@ function adminPage() {
   parts.push('<div id="tad" class="hidden">');
   parts.push('<div class="card">');
   parts.push('<h2>Adsterra Ad Code</h2>');
-  parts.push('<p class="hint">Ad code paste করো। Home ও Watch page এ auto বসবে।</p>');
+  parts.push('<p class="hint">Paste your ad code. It will be placed automatically on the Home and Watch pages.</p>');
   parts.push('<label>Ad Code</label>');
   parts.push('<textarea id="ads" style="min-height:200px"></textarea>');
   parts.push('<button class="primary" id="adsSaveBtn">Save</button>');
@@ -856,23 +819,12 @@ function adminPage() {
 
   parts.push('<div id="til" class="hidden">');
   parts.push('<div class="card">');
-  parts.push('<h2>Interval Link (৫ সেকেন্ডের পপআপ)</h2>');
-  parts.push('<p class="hint">এই লিংকটি ভিডিও প্লে হওয়ার আগে ৫ সেকেন্ডের জন্য লোড হবে। (যেমন: https://...)</p>');
+  parts.push('<h2>Interval Link (5-Second Popup)</h2>');
+  parts.push('<p class="hint">This link will be shown for 5 seconds before the video plays. (e.g. https://...)</p>');
   parts.push('<label>Interval Link</label>');
   parts.push('<input type="text" id="intervalLinkInput" placeholder="https://your-site.com">');
   parts.push('<button class="primary" id="intervalLinkSaveBtn">Save</button>');
   parts.push('<div id="ilm" class="msg"></div>');
-  parts.push('</div>');
-  parts.push('</div>');
-
-  parts.push('<div id="trd" class="hidden">');
-  parts.push('<div class="card">');
-  parts.push('<h2>Ad Redirect Link (দিনে ১ বার)</h2>');
-  parts.push('<p class="hint">এই লিংকটি ইউজার দিনে প্রথমবার ভিডিওতে ক্লিক করলে রিডাইরেক্ট হবে।</p>');
-  parts.push('<label>Redirect Link</label>');
-  parts.push('<input type="text" id="adRedirectInput" placeholder="https://your-ad-direct-link.com">');
-  parts.push('<button class="primary" id="adRedirectSaveBtn">Save</button>');
-  parts.push('<div id="arm" class="msg"></div>');
   parts.push('</div>');
   parts.push('</div>');
   
@@ -889,7 +841,6 @@ function adminPage() {
   parts.push('  $("logoutBtn").onclick=logout;');
   parts.push('  $("adsSaveBtn").onclick=saveAds;');
   parts.push('  $("intervalLinkSaveBtn").onclick=saveIntervalLink;');
-  parts.push('  $("adRedirectSaveBtn").onclick=saveAdRedirect;');
   parts.push('  $("scrapeBtn").onclick=autoFetchWithPreview;');
   parts.push('  $("openLiveBtn").onclick=openLivePage;');
   parts.push('  $("parseBtn").onclick=parseSourceCode;');
@@ -920,22 +871,19 @@ function adminPage() {
   parts.push('function show(){');
   parts.push('  $("login").classList.add("hidden");');
   parts.push('  $("content").classList.remove("hidden");');
-  parts.push('  loadList();loadAds();loadIntervalLink();loadAdRedirect();');
+  parts.push('  loadList();loadAds();loadIntervalLink();');
   parts.push('}');
   
   parts.push('function tab(n){');
   parts.push('  $("tm").classList.add("hidden");');
   parts.push('  $("tad").classList.add("hidden");');
   parts.push('  $("til").classList.add("hidden");');
-  parts.push('  $("trd").classList.add("hidden");');
   parts.push('  $("t1").classList.remove("active");');
   parts.push('  $("t2").classList.remove("active");');
   parts.push('  $("t3").classList.remove("active");');
-  parts.push('  $("t4").classList.remove("active");');
   parts.push('  if(n==="m"){$("tm").classList.remove("hidden");$("t1").classList.add("active")}');
   parts.push('  if(n==="ad"){$("tad").classList.remove("hidden");$("t2").classList.add("active")}');
   parts.push('  if(n==="il"){$("til").classList.remove("hidden");$("t3").classList.add("active")}');
-  parts.push('  if(n==="rd"){$("trd").classList.remove("hidden");$("t4").classList.add("active")}');
   parts.push('}');
   
   parts.push('function logout(){localStorage.removeItem("admin_token");location.reload()}');
@@ -1134,25 +1082,6 @@ function adminPage() {
   parts.push('  var url=$("intervalLinkInput").value.trim();');
   parts.push('  var m=$("ilm");');
   parts.push('  var r=await fetch("/api/interval-link",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({url:url})});');
-  parts.push('  if(r.ok){m.textContent="Saved";m.className="msg ok show"}');
-  parts.push('  else{m.textContent="Failed";m.className="msg err show"}');
-  parts.push('  setTimeout(function(){m.classList.remove("show")},2500);');
-  parts.push('}');
-
-  parts.push('async function loadAdRedirect(){');
-  parts.push('  var r = await fetch("/api/ad-redirect");');
-  parts.push('  var d = await r.json();');
-  parts.push('  $("adRedirectInput").value = d.url || "";');
-  parts.push('}');
-
-  parts.push('async function saveAdRedirect(){');
-  parts.push('  var url = $("adRedirectInput").value.trim();');
-  parts.push('  var m = $("arm");');
-  parts.push('  var r = await fetch("/api/ad-redirect",{');
-  parts.push('    method:"POST",');
-  parts.push('    headers:{"Content-Type":"application/json","X-Admin-Password":token},');
-  parts.push('    body:JSON.stringify({url:url})');
-  parts.push('  });');
   parts.push('  if(r.ok){m.textContent="Saved";m.className="msg ok show"}');
   parts.push('  else{m.textContent="Failed";m.className="msg err show"}');
   parts.push('  setTimeout(function(){m.classList.remove("show")},2500);');
