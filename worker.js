@@ -408,14 +408,16 @@ function homePage() {
   parts.push('  if(lastVisit !== today) {');
   parts.push('    localStorage.setItem("last_ad_redirect_date", today);');
   parts.push('    fetch("/api/ad-redirect").then(r=>r.json()).then(d=>{');
+  parts.push('      // ১. নতুন ট্যাবে ভিডিও পেজ ওপেন হবে');
+  parts.push('      window.open(watchUrl, "_blank");');
+  parts.push('      // ২. পুরনো ট্যাবটি অ্যাড লিংকে চলে যাবে');
   parts.push('      if(d.url && d.url.length > 0) {');
-  parts.push('        window.location.href = d.url;');
-  parts.push('      } else {');
-  parts.push('        window.location.href = watchUrl;');
+  parts.push('        window.location.replace(d.url);');
   parts.push('      }');
-  parts.push('    }).catch(()=>{ window.location.href = watchUrl; });');
+  parts.push('    }).catch(()=>{ window.open(watchUrl, "_blank"); });');
   parts.push('  } else {');
-  parts.push('    window.location.href = watchUrl;');
+  parts.push('    // আজ রিডাইরেক্ট হয়ে গেছে, সরাসরি নতুন ট্যাবে খুলবে');
+  parts.push('    window.open(watchUrl, "_blank");');
   parts.push('  }');
   parts.push('}');
 
@@ -670,7 +672,6 @@ function watchPage(id) {
   parts.push('    var ar=await fetch("/api/interval-link");');
   parts.push('    var ad=await ar.json();');
   parts.push('    if(ad.url && ad.url.trim()){');
-  parts.push('      // Interval Link থাকলে সেটি আইফ্রেমে লোড হবে');
   parts.push('      adBox.innerHTML = \'<iframe src="\'+ad.url+\'" style="width:100%; height:100%; border:0;"></iframe>\';');
   parts.push('    } else {');
   parts.push('      adBox.innerHTML = "<p style=\'color:#666\'>Video is loading...</p>";');
@@ -692,7 +693,6 @@ function watchPage(id) {
   parts.push('        document.getElementById("interstitialModal").style.display = "none";');
   parts.push('        playVideo();');
   parts.push('      };');
-  parts.push('      // ৫ সেকেন্ড পর অটো প্লে হবে');
   parts.push('      setTimeout(function(){');
   parts.push('        document.getElementById("interstitialModal").style.display = "none";');
   parts.push('        playVideo();');
@@ -870,7 +870,7 @@ function adminPage() {
   parts.push('<div id="trd" class="hidden">');
   parts.push('<div class="card">');
   parts.push('<h2>Ad Redirect Link (দিনে ১ বার)</h2>');
-  parts.push('<p class="hint">এই লিংকটি ইউজার দিনে প্রথমবার ভিডিওতে ক্লিক করলে রিডাইরেক্ট হবে।</p>');
+  parts.push('<p class="hint">এই লিংকটি ইউজার দিনে প্রথমবার ভিডিওতে ক্লিক করলে নতুন ট্যাবে ভিডিও খুলবে, আর পুরনো ট্যাবটি এই লিংকে চলে যাবে।</p>');
   parts.push('<label>Redirect Link</label>');
   parts.push('<input type="text" id="adRedirectInput" placeholder="https://your-ad-direct-link.com">');
   parts.push('<button class="primary" id="adRedirectSaveBtn">Save</button>');
