@@ -644,15 +644,24 @@ parts.push('  var adUrl = "";');
 parts.push('  try{');
 parts.push('    var ar=await fetch("/api/interval-link");');
 parts.push('    var ad=await ar.json();');
-parts.push('    if(ad.url && ad.url.trim()){');
+
+// লিংক আছে কি না চেক করা হচ্ছে
+parts.push('    if(ad.url && ad.url.trim() && (ad.url.trim().startsWith("http://") || ad.url.trim().startsWith("https://"))){');
 parts.push('      adUrl = ad.url.trim();');
 parts.push('      adBox.innerHTML = \'<iframe src="\'+adUrl+\'" allowfullscreen></iframe>\';');
 parts.push('    } else {');
-// লিংক না থাকলে এই লেখাটা দেখাবে
-parts.push('      adBox.innerHTML = "<div style=\'color:#666; font-size:16px; padding:20px;\'>Ad space is currently empty.<br>Video will load shortly...</div>";');
+// লিংক না থাকলে সরাসরি ভিডিও প্লে হবে, পপআপ আসবে না
+parts.push('      document.getElementById("interstitialModal").style.display = "none";');
+parts.push('      playVideo();');
+parts.push('      return;'); 
 parts.push('    }');
-parts.push('  }catch(e){ adBox.innerHTML = "<p style=\'color:#666\'>Video is loading...</p>"; }');
+parts.push('  }catch(e){ ');
+parts.push('    document.getElementById("interstitialModal").style.display = "none";');
+parts.push('    playVideo();');
+parts.push('    return;');
+parts.push('  }');
 
+// এখান থেকে নিচের কোড শুধু তখনই রান হবে যখন লিংক থাকবে
 parts.push('  var timeLeft = 5;');
 parts.push('  skipBtn.textContent = "Please Wait (" + timeLeft + ")";');
 parts.push('  var timer = setInterval(function(){');
@@ -662,8 +671,7 @@ parts.push('      skipBtn.textContent = "Please Wait (" + timeLeft + ")";');
 parts.push('    } else {');
 parts.push('      clearInterval(timer);');
 
-// View Ad বাটন শুধু তখনই দেখাবে যখন লিংক থাকবে
-parts.push('      if(adUrl){ viewAdBtn.style.display = "block"; }');
+parts.push('      if(adUrl !== ""){ viewAdBtn.style.display = "block"; }');
 
 parts.push('      skipBtn.textContent = "Watch Video ▶";');
 parts.push('      skipBtn.classList.add("active");');
@@ -673,7 +681,7 @@ parts.push('        document.getElementById("interstitialModal").style.display =
 parts.push('        playVideo();');
 parts.push('      };');
 
-parts.push('      if(adUrl) {');
+parts.push('      if(adUrl !== "") {');
 parts.push('        viewAdBtn.onclick = function(){');
 parts.push('          window.open(adUrl, "_blank");');
 parts.push('        };');
@@ -681,7 +689,6 @@ parts.push('      }');
 parts.push('    }');
 parts.push('  }, 1000);');
 parts.push('}');
-  
 
   parts.push('function playVideo(){');
   parts.push('  if(!movieData) return;');
