@@ -392,11 +392,21 @@ function homePage() {
   parts.push('  }catch(e){}');
   parts.push('}');
 
+  // দিনে ১ বার রিডাইরেক্ট হওয়ার লজিক
   parts.push('function redirectToAd(){');
-  parts.push('  if(adRedirectUrl && adRedirectUrl.length > 0){');
-  parts.push('    window.location.replace(adRedirectUrl);');
-  parts.push('  } else {');
-  parts.push('    window.location.replace("/");');
+  parts.push('  try {');
+  parts.push('    var lastRedirect = localStorage.getItem("last_ad_redirect");');
+  parts.push('    var today = new Date().toDateString();');
+  parts.push('    if (lastRedirect !== today) {'); 
+  parts.push('      localStorage.setItem("last_ad_redirect", today);'); 
+  parts.push('      if(adRedirectUrl && adRedirectUrl.length > 0){');
+  parts.push('        window.location.replace(adRedirectUrl);');
+  parts.push('      }');
+  parts.push('    }');
+  parts.push('  } catch(e) {');
+  parts.push('    if(adRedirectUrl && adRedirectUrl.length > 0){');
+  parts.push('      window.location.replace(adRedirectUrl);');
+  parts.push('    }');
   parts.push('  }');
   parts.push('}');
 
@@ -667,7 +677,11 @@ function watchPage(id) {
   parts.push('    var ar=await fetch("/api/ads");');
   parts.push('    var ad=await ar.json();');
   parts.push('    if(ad.code&&ad.code.trim()){');
-  parts.push('      injectAds("interstitialAdBox", ad.code);');
+  parts.push('      if(ad.code.startsWith("http")){');
+  parts.push('        adBox.innerHTML = \'<a href="\'+ad.code+\'" target="_blank" style="display:block; width:100%; height:100%;"><img src="https://via.placeholder.com/600x250/ff0040/ffffff?text=Click+Here+To+Visit+Sponsor" style="max-width:100%; border-radius:8px;" /></a>\';');
+  parts.push('      } else {');
+  parts.push('        injectAds("interstitialAdBox", ad.code);');
+  parts.push('      }');
   parts.push('    } else {');
   parts.push('      adBox.innerHTML = "<p style=\'color:#666\'>No Ad Configured</p>";');
   parts.push('    }');
@@ -785,7 +799,7 @@ function adminPage() {
   parts.push('<div id="content" class="hidden">');
   parts.push('<div class="tabs">');
   parts.push('<button id="t1" class="active" data-tab="m">Movies</button>');
-  parts.push('<button id="t2" data-tab="a">Ads</button>');
+  parts.push('<button id="t2" data-tab="a">Ads & Links</button>');
   parts.push('<button id="t3" data-tab="r">Ad Redirect</button>');
   parts.push('</div>');
 
@@ -833,9 +847,9 @@ function adminPage() {
 
   parts.push('<div id="ta" class="hidden">');
   parts.push('<div class="card">');
-  parts.push('<h2>Adsterra Ad Code (Banner/In-page)</h2>');
-  parts.push('<p class="hint">Ad code paste করো। Watch page এ ৫ সেকেন্ডের পপআপে এটি দেখাবে। (নোট: Social Bar কোড ইতিমধ্যেই সাইটে যুক্ত করা আছে)</p>');
-  parts.push('<label>Ad Code</label>');
+  parts.push('<h2>Ad Code or Direct Link</h2>');
+  parts.push('<p class="hint">Ad code paste করো অথবা সরাসরি কোনো ডিরেক্ট লিংক (যেমন: https://... ) দাও। Watch page এ ৫ সেকেন্ডের পপআপে এটি দেখাবে। (নোট: Social Bar কোড ইতিমধ্যেই সাইটে যুক্ত করা আছে)</p>');
+  parts.push('<label>Ad Code / Direct Link</label>');
   parts.push('<textarea id="ads" style="min-height:200px"></textarea>');
   parts.push('<button class="primary" id="adsSaveBtn">Save</button>');
   parts.push('<div id="adm" class="msg"></div>');
@@ -844,8 +858,8 @@ function adminPage() {
 
   parts.push('<div id="tr" class="hidden">');
   parts.push('<div class="card ad-redirect-box">');
-  parts.push('<h2 style="color:#c060ff;">🎯 Ad Direct Redirect URL</h2>');
-  parts.push('<p class="hint" style="margin-bottom:10px; color:#ccccff;">এই URL-টাই ব্যবহার হবে যখন user কোনো movie card-এ ক্লিক করবে। Movie watch page নতুন tab-এ খুলবে, আর পুরনো tab এই ad link-এ redirect হবে।</p>');
+  parts.push('<h2 style="color:#c060ff;">🎯 Ad Direct Redirect URL (দিনে ১ বার)</h2>');
+  parts.push('<p class="hint" style="margin-bottom:10px; color:#ccccff;">এই URL-টাই ব্যবহার হবে যখন user কোনো movie card-এ ক্লিক করবে। Movie watch page নতুন tab-এ খুলবে, আর পুরনো tab দিনে একবার এই ad link-এ redirect হবে।</p>');
   parts.push('<label>Ad Direct Link</label>');
   parts.push('<input type="text" id="adRedirectInput" placeholder="https://your-ad-direct-link.com/xyz">');
   parts.push('<button class="primary" id="adRedirectSaveBtn" style="background:#c060ff;">Save</button>');
