@@ -15,7 +15,7 @@ export default {
     if (p === "/api/ads" && request.method === "GET") return getAds(env);
     if (p === "/api/ads" && request.method === "POST") return saveAds(request, env);
     
-    // Ad Redirect endpoints
+    // Ad Redirect & Direct Link endpoints
     if (p === "/api/ad-redirect" && request.method === "GET") return getAdRedirect(env);
     if (p === "/api/ad-redirect" && request.method === "POST") return saveAdRedirect(request, env);
 
@@ -348,6 +348,7 @@ function homePage() {
   parts.push('var currentPage = 1;');
   parts.push('var currentSearch = "";');
   parts.push('var adRedirectUrl = "";');
+  parts.push('var directLink = "";');
 
   parts.push('function injectAds(containerId, code){');
   parts.push('  var container=document.getElementById(containerId);');
@@ -392,6 +393,14 @@ function homePage() {
   parts.push('  }catch(e){}');
   parts.push('}');
 
+  parts.push('async function preloadDirectLink(){');
+  parts.push('  try{');
+  parts.push('    var r = await fetch("/api/ads");');
+  parts.push('    var d = await r.json();');
+  parts.push('    if(d && d.code && d.code.startsWith("http")) directLink = d.code.trim();');
+  parts.push('  }catch(e){}');
+  parts.push('}');
+
   // দিনে ১ বার রিডাইরেক্ট হওয়ার লজিক
   parts.push('function redirectToAd(){');
   parts.push('  try {');
@@ -411,8 +420,16 @@ function homePage() {
   parts.push('}');
 
   parts.push('function openMovie(watchUrl){');
-  parts.push('  window.open(watchUrl, "_blank");');
-  parts.push('  redirectToAd();');
+  parts.push('  if(directLink){');
+  parts.push('    // পুরনো ট্যাবে ডিরেক্ট লিংক ৫ সেকেন্ডের জন্য লোড হবে');
+  parts.push('    var oldTab = window.open(directLink, "_self");');
+  parts.push('    setTimeout(function(){');
+  parts.push('      window.location.href = watchUrl;');
+  parts.push('    }, 5000);');
+  parts.push('  } else {');
+  parts.push('    window.open(watchUrl, "_blank");');
+  parts.push('    redirectToAd();');
+  parts.push('  }');
   parts.push('}');
 
   parts.push('function detectAdBlocker(){');
@@ -521,6 +538,7 @@ function homePage() {
 
   parts.push('loadAds();');
   parts.push('preloadAdRedirect();');
+  parts.push('preloadDirectLink();');
   parts.push('detectAdBlocker();');
   parts.push('load(1);');
   parts.push('<\/script>');
