@@ -488,7 +488,6 @@ function homePage() {
   parts.push('</body></html>');
   return parts.join("\n");
 }
-
 // ================= WATCH PAGE =================
 function watchPage(id) {
   const parts = [];
@@ -517,14 +516,21 @@ function watchPage(id) {
   parts.push('.adblock-content{background:#1c1c1c; padding:30px; border-radius:10px; border:2px solid #ff0040; max-width:450px; margin:20px; box-shadow:0 0 20px rgba(255,0,64,0.5);}');
   parts.push('.adblock-content h2{color:#ff0040; margin-bottom:15px; font-size:24px;}');
   
-  // BIGGER INTERVAL MODAL
-  parts.push('.interstitial-modal{display:flex; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:10000; flex-direction:column; align-items:center; justify-content:center; padding:15px;}');
-  parts.push('.interstitial-box{background:#1c1c1c; width:96%; max-width:1100px; height:92vh; max-height:900px; padding:20px; border-radius:12px; border:2px solid #ff0040; text-align:center; position:relative; box-shadow:0 0 30px rgba(255,0,64,0.4); display:flex; flex-direction:column;}');
-  parts.push('.interstitial-box h3{color:#fff; margin-bottom:15px; font-size:20px; flex-shrink:0;}');
-  parts.push('.ad-container{flex:1; min-height:400px; display:flex; align-items:center; justify-content:center; background:#000; border-radius:8px; overflow:hidden; margin-bottom:15px;}');
+  // Modal CSS Fix for Mobile
+  parts.push('.interstitial-modal{display:flex; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:10000; flex-direction:column; align-items:center; justify-content:center; padding:10px;}');
+  parts.push('.interstitial-box{background:#1c1c1c; width:100%; max-width:800px; height:100%; max-height:95vh; padding:15px; border-radius:12px; border:2px solid #ff0040; text-align:center; display:flex; flex-direction:column;}');
+  parts.push('.interstitial-box h3{color:#fff; margin-bottom:10px; font-size:18px; flex-shrink:0;}');
+  parts.push('.ad-container{flex:1; width:100%; min-height:200px; display:flex; align-items:center; justify-content:center; background:#000; border-radius:8px; overflow:hidden; margin-bottom:10px;}');
   parts.push('.ad-container iframe{width:100%; height:100%; border:0;}');
-  parts.push('.skip-btn{background:#333; color:#fff; border:none; padding:14px 30px; border-radius:8px; font-size:17px; font-weight:bold; cursor:not-allowed; transition:0.3s; width:100%; max-width:400px; flex-shrink:0; align-self:center;}');
-  parts.push('.skip-btn.active{background:#ff0040; cursor:pointer; box-shadow:0 0 15px rgba(255,0,64,0.5);}');
+  
+  // Button CSS
+  parts.push('.btn-row{display:flex; gap:10px; width:100%; flex-shrink:0; flex-wrap:wrap;}');
+  parts.push('.action-btn{border:none; padding:14px 10px; border-radius:8px; font-size:16px; font-weight:bold; transition:0.3s; flex:1; min-width:120px;}');
+  parts.push('.btn-ad{background:#2196F3; color:#fff; cursor:pointer;}');
+  parts.push('.btn-ad:hover{background:#1976D2;}');
+  parts.push('.btn-watch{background:#333; color:#fff; cursor:not-allowed;}');
+  parts.push('.btn-watch.active{background:#ff0040; cursor:pointer; box-shadow:0 0 15px rgba(255,0,64,0.5);}');
+  parts.push('.btn-watch.active:hover{background:#e60039;}');
   
   parts.push('</style></head><body>');
   
@@ -536,11 +542,15 @@ function watchPage(id) {
   parts.push('  </div>');
   parts.push('</div>');
 
+  // Interstitial Modal HTML - Buttons are now pre-built in HTML
   parts.push('<div id="interstitialModal" class="interstitial-modal">');
   parts.push('  <div class="interstitial-box">');
   parts.push('    <h3>Your video is loading... Please wait</h3>');
   parts.push('    <div class="ad-container" id="interstitialAdBox"></div>');
-  parts.push('    <button id="skipBtn" class="skip-btn" disabled>Please Wait (5)</button>');
+  parts.push('    <div class="btn-row">');
+  parts.push('      <button id="viewAdBtn" class="action-btn btn-ad" style="display:none;">🔗 View Ad</button>');
+  parts.push('      <button id="skipBtn" class="action-btn btn-watch" disabled>Please Wait (5)</button>');
+  parts.push('    </div>');
   parts.push('  </div>');
   parts.push('</div>');
 
@@ -573,13 +583,9 @@ function watchPage(id) {
   
   parts.push('function openFullscreen() {');
   parts.push('  var elem = document.getElementById("pb");');
-  parts.push('  if (elem.requestFullscreen) {');
-  parts.push('    elem.requestFullscreen();');
-  parts.push('  } else if (elem.webkitRequestFullscreen) {');
-  parts.push('    elem.webkitRequestFullscreen();');
-  parts.push('  } else if (elem.msRequestFullscreen) {');
-  parts.push('    elem.msRequestFullscreen();');
-  parts.push('  }');
+  parts.push('  if (elem.requestFullscreen) { elem.requestFullscreen(); }');
+  parts.push('  else if (elem.webkitRequestFullscreen) { elem.webkitRequestFullscreen(); }');
+  parts.push('  else if (elem.msRequestFullscreen) { elem.msRequestFullscreen(); }');
   parts.push('}');
   
   parts.push('function detectAdBlocker(){');
@@ -630,55 +636,50 @@ function watchPage(id) {
   parts.push('  }');
   parts.push('}');
 
-parts.push('async function showInterstitialAd(){');
-parts.push('  var adBox = document.getElementById("interstitialAdBox");');
-parts.push('  var skipBtn = document.getElementById("skipBtn");');
-parts.push('  var adUrl = "";');
+  parts.push('async function showInterstitialAd(){');
+  parts.push('  var adBox = document.getElementById("interstitialAdBox");');
+  parts.push('  var skipBtn = document.getElementById("skipBtn");');
+  parts.push('  var viewAdBtn = document.getElementById("viewAdBtn");');
+  parts.push('  var adUrl = "";');
   
-parts.push('  try{');
-parts.push('    var ar=await fetch("/api/interval-link");');
-parts.push('    var ad=await ar.json();');
-parts.push('    if(ad.url && ad.url.trim()){');
-parts.push('      adUrl = ad.url.trim();');
-parts.push('      adBox.innerHTML = \'<iframe src="\'+adUrl+\'" allowfullscreen></iframe>\';');
-parts.push('    } else {');
-parts.push('      adBox.innerHTML = "<p style=\'color:#666\'>Video is loading...</p>";');
-parts.push('    }');
-parts.push('  }catch(e){}');
+  parts.push('  try{');
+  parts.push('    var ar=await fetch("/api/interval-link");');
+  parts.push('    var ad=await ar.json();');
+  parts.push('    if(ad.url && ad.url.trim()){');
+  parts.push('      adUrl = ad.url.trim();');
+  parts.push('      adBox.innerHTML = \'<iframe src="\'+adUrl+\'" allowfullscreen></iframe>\';');
+  parts.push('    } else {');
+  parts.push('      adBox.innerHTML = "<p style=\'color:#666\'>Video is loading...</p>";');
+  parts.push('    }');
+  parts.push('  }catch(e){}');
   
-parts.push('  var timeLeft = 5;');
-parts.push('  skipBtn.textContent = "Please Wait (" + timeLeft + ")";');
-parts.push('  var timer = setInterval(function(){');
-parts.push('    timeLeft--;');
-parts.push('    if(timeLeft > 0){');
-parts.push('      skipBtn.textContent = "Please Wait (" + timeLeft + ")";');
-parts.push('    } else {');
-parts.push('      clearInterval(timer);');
-// --- replace the single skipBtn block with two buttons ---
-parts.push('      var btnRow = document.createElement("div");');
-parts.push('      btnRow.style.cssText = "display:flex; gap:12px; justify-content:center; flex-wrap:wrap; width:100%; flex-shrink:0;";');
-parts.push('      var adBtn = document.createElement("button");');
-parts.push('      adBtn.className = "skip-btn";');
-parts.push('      adBtn.textContent = "🔗 View Ad / Open Ad";');
-parts.push('      adBtn.style.background = "#2196F3";');
-parts.push('      adBtn.style.cursor = "pointer";');
-parts.push('      adBtn.disabled = !adUrl;');
-parts.push('      adBtn.onclick = function(){');
-parts.push('        if(adUrl) window.open(adUrl, "_blank");');
-parts.push('      };');
-parts.push('      skipBtn.textContent = "Watch Video ▶";');
-parts.push('      skipBtn.classList.add("active");');
-parts.push('      skipBtn.disabled = false;');
-parts.push('      skipBtn.onclick = function(){');
-parts.push('        document.getElementById("interstitialModal").style.display = "none";');
-parts.push('        playVideo();');
-parts.push('      };');
-parts.push('      btnRow.appendChild(adBtn);');
-parts.push('      btnRow.appendChild(skipBtn);');
-parts.push('      skipBtn.parentNode.insertBefore(btnRow, skipBtn);');
-parts.push('    }');
-parts.push('  }, 1000);');
-parts.push('}');
+  parts.push('  var timeLeft = 5;');
+  parts.push('  skipBtn.textContent = "Please Wait (" + timeLeft + ")";');
+  parts.push('  var timer = setInterval(function(){');
+  parts.push('    timeLeft--;');
+  parts.push('    if(timeLeft > 0){');
+  parts.push('      skipBtn.textContent = "Please Wait (" + timeLeft + ")";');
+  parts.push('    } else {');
+  parts.push('      clearInterval(timer);');
+  
+  // Show View Ad button if URL exists
+  parts.push('      if(adUrl){ viewAdBtn.style.display = "block"; }');
+  
+  parts.push('      skipBtn.textContent = "Watch Video ▶";');
+  parts.push('      skipBtn.classList.add("active");');
+  parts.push('      skipBtn.disabled = false;');
+  parts.push('      skipBtn.onclick = function(){');
+  parts.push('        document.getElementById("interstitialModal").style.display = "none";');
+  parts.push('        playVideo();');
+  parts.push('      };');
+  
+  // View Ad button click action
+  parts.push('      viewAdBtn.onclick = function(){');
+  parts.push('        window.open(adUrl, "_blank");');
+  parts.push('      };');
+  parts.push('    }');
+  parts.push('  }, 1000);');
+  parts.push('}');
 
   parts.push('function playVideo(){');
   parts.push('  if(!movieData) return;');
