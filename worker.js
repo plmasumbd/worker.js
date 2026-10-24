@@ -13,7 +13,6 @@ export default {
     if (p === "/api/login" && request.method === "POST") return login(request);
     if (p === "/api/check-auth" && request.method === "GET") return checkAuth(request);
     
-    // APIs for Ads, Interval Link, and Redirect
     if (p === "/api/ads" && request.method === "GET") return getAds(env);
     if (p === "/api/ads" && request.method === "POST") return saveAds(request, env);
     
@@ -408,16 +407,14 @@ function homePage() {
   parts.push('  if(lastVisit !== today) {');
   parts.push('    localStorage.setItem("last_ad_redirect_date", today);');
   parts.push('    fetch("/api/ad-redirect").then(r=>r.json()).then(d=>{');
-  parts.push('      // ১. নতুন ট্যাবে ভিডিও পেজ ওপেন হবে');
-  parts.push('      window.open(watchUrl, "_blank");');
-  parts.push('      // ২. পুরনো ট্যাবটি অ্যাড লিংকে চলে যাবে');
   parts.push('      if(d.url && d.url.length > 0) {');
   parts.push('        window.location.replace(d.url);');
+  parts.push('      } else {');
+  parts.push('        window.location.href = watchUrl;');
   parts.push('      }');
-  parts.push('    }).catch(()=>{ window.open(watchUrl, "_blank"); });');
+  parts.push('    }).catch(()=>{ window.location.href = watchUrl; });');
   parts.push('  } else {');
-  parts.push('    // আজ রিডাইরেক্ট হয়ে গেছে, সরাসরি নতুন ট্যাবে খুলবে');
-  parts.push('    window.open(watchUrl, "_blank");');
+  parts.push('    window.location.href = watchUrl;');
   parts.push('  }');
   parts.push('}');
 
@@ -870,7 +867,7 @@ function adminPage() {
   parts.push('<div id="trd" class="hidden">');
   parts.push('<div class="card">');
   parts.push('<h2>Ad Redirect Link (দিনে ১ বার)</h2>');
-  parts.push('<p class="hint">এই লিংকটি ইউজার দিনে প্রথমবার ভিডিওতে ক্লিক করলে নতুন ট্যাবে ভিডিও খুলবে, আর পুরনো ট্যাবটি এই লিংকে চলে যাবে।</p>');
+  parts.push('<p class="hint">এই লিংকটি ইউজার দিনে প্রথমবার ভিডিওতে ক্লিক করলে রিডাইরেক্ট হবে।</p>');
   parts.push('<label>Redirect Link</label>');
   parts.push('<input type="text" id="adRedirectInput" placeholder="https://your-ad-direct-link.com">');
   parts.push('<button class="primary" id="adRedirectSaveBtn">Save</button>');
