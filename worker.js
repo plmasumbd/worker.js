@@ -635,51 +635,53 @@ function watchPage(id) {
   parts.push('    document.getElementById("t").textContent="Video Not Found";');
   parts.push('  }');
   parts.push('}');
+parts.push('async function showInterstitialAd(){');
+parts.push('  var adBox = document.getElementById("interstitialAdBox");');
+parts.push('  var skipBtn = document.getElementById("skipBtn");');
+parts.push('  var viewAdBtn = document.getElementById("viewAdBtn");');
+parts.push('  var adUrl = "";');
 
-  parts.push('async function showInterstitialAd(){');
-  parts.push('  var adBox = document.getElementById("interstitialAdBox");');
-  parts.push('  var skipBtn = document.getElementById("skipBtn");');
-  parts.push('  var viewAdBtn = document.getElementById("viewAdBtn");');
-  parts.push('  var adUrl = "";');
+parts.push('  try{');
+parts.push('    var ar=await fetch("/api/interval-link");');
+parts.push('    var ad=await ar.json();');
+parts.push('    if(ad.url && ad.url.trim()){');
+parts.push('      adUrl = ad.url.trim();');
+parts.push('      adBox.innerHTML = \'<iframe src="\'+adUrl+\'" allowfullscreen></iframe>\';');
+parts.push('    } else {');
+// লিংক না থাকলে এই লেখাটা দেখাবে
+parts.push('      adBox.innerHTML = "<div style=\'color:#666; font-size:16px; padding:20px;\'>Ad space is currently empty.<br>Video will load shortly...</div>";');
+parts.push('    }');
+parts.push('  }catch(e){ adBox.innerHTML = "<p style=\'color:#666\'>Video is loading...</p>"; }');
+
+parts.push('  var timeLeft = 5;');
+parts.push('  skipBtn.textContent = "Please Wait (" + timeLeft + ")";');
+parts.push('  var timer = setInterval(function(){');
+parts.push('    timeLeft--;');
+parts.push('    if(timeLeft > 0){');
+parts.push('      skipBtn.textContent = "Please Wait (" + timeLeft + ")";');
+parts.push('    } else {');
+parts.push('      clearInterval(timer);');
+
+// View Ad বাটন শুধু তখনই দেখাবে যখন লিংক থাকবে
+parts.push('      if(adUrl){ viewAdBtn.style.display = "block"; }');
+
+parts.push('      skipBtn.textContent = "Watch Video ▶";');
+parts.push('      skipBtn.classList.add("active");');
+parts.push('      skipBtn.disabled = false;');
+parts.push('      skipBtn.onclick = function(){');
+parts.push('        document.getElementById("interstitialModal").style.display = "none";');
+parts.push('        playVideo();');
+parts.push('      };');
+
+parts.push('      if(adUrl) {');
+parts.push('        viewAdBtn.onclick = function(){');
+parts.push('          window.open(adUrl, "_blank");');
+parts.push('        };');
+parts.push('      }');
+parts.push('    }');
+parts.push('  }, 1000);');
+parts.push('}');
   
-  parts.push('  try{');
-  parts.push('    var ar=await fetch("/api/interval-link");');
-  parts.push('    var ad=await ar.json();');
-  parts.push('    if(ad.url && ad.url.trim()){');
-  parts.push('      adUrl = ad.url.trim();');
-  parts.push('      adBox.innerHTML = \'<iframe src="\'+adUrl+\'" allowfullscreen></iframe>\';');
-  parts.push('    } else {');
-  parts.push('      adBox.innerHTML = "<p style=\'color:#666\'>Video is loading...</p>";');
-  parts.push('    }');
-  parts.push('  }catch(e){}');
-  
-  parts.push('  var timeLeft = 5;');
-  parts.push('  skipBtn.textContent = "Please Wait (" + timeLeft + ")";');
-  parts.push('  var timer = setInterval(function(){');
-  parts.push('    timeLeft--;');
-  parts.push('    if(timeLeft > 0){');
-  parts.push('      skipBtn.textContent = "Please Wait (" + timeLeft + ")";');
-  parts.push('    } else {');
-  parts.push('      clearInterval(timer);');
-  
-  // Show View Ad button if URL exists
-  parts.push('      if(adUrl){ viewAdBtn.style.display = "block"; }');
-  
-  parts.push('      skipBtn.textContent = "Watch Video ▶";');
-  parts.push('      skipBtn.classList.add("active");');
-  parts.push('      skipBtn.disabled = false;');
-  parts.push('      skipBtn.onclick = function(){');
-  parts.push('        document.getElementById("interstitialModal").style.display = "none";');
-  parts.push('        playVideo();');
-  parts.push('      };');
-  
-  // View Ad button click action
-  parts.push('      viewAdBtn.onclick = function(){');
-  parts.push('        window.open(adUrl, "_blank");');
-  parts.push('      };');
-  parts.push('    }');
-  parts.push('  }, 1000);');
-  parts.push('}');
 
   parts.push('function playVideo(){');
   parts.push('  if(!movieData) return;');
