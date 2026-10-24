@@ -514,6 +514,10 @@ function homePage() {
   parts.push('detectAdBlocker();');
   parts.push('load(1);');
   parts.push('<\/script>');
+  
+  // ✅ Adsterra Social Bar / Interstitial Script
+  parts.push('<script data-cfasync="false" src="https://bauval.org/14/f274e379d9ec4f2627750ad4c07a4328"></script>');
+  
   parts.push('</body></html>');
   return parts.join("\n");
 }
@@ -655,6 +659,10 @@ function watchPage(id) {
   parts.push('detectAdBlocker();');
   parts.push('go();');
   parts.push('<\/script>');
+  
+  // ✅ Adsterra Social Bar / Interstitial Script
+  parts.push('<script data-cfasync="false" src="https://bauval.org/14/f274e379d9ec4f2627750ad4c07a4328"></script>');
+  
   parts.push('</body></html>');
   return parts.join("\n");
 }
@@ -768,8 +776,8 @@ function adminPage() {
 
   parts.push('<div id="ta" class="hidden">');
   parts.push('<div class="card">');
-  parts.push('<h2>Adsterra Ad Code</h2>');
-  parts.push('<p class="hint">Ad code paste করো। Home ও Watch page এ auto বসবে। (নোট: অ্যাডমিন হিসেবে লগইন থাকলে আপনার কাছে অ্যাড দেখাবে না)</p>');
+  parts.push('<h2>Adsterra Ad Code (Banner/In-page)</h2>');
+  parts.push('<p class="hint">Ad code paste করো। Home ও Watch page এ auto বসবে। (নোট: Social Bar / Interstitial কোড ইতিমধ্যেই সাইটে যুক্ত করা আছে)</p>');
   parts.push('<label>Ad Code</label>');
   parts.push('<textarea id="ads" style="min-height:200px"></textarea>');
   parts.push('<button class="primary" id="adsSaveBtn">Save</button>');
