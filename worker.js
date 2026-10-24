@@ -13,6 +13,7 @@ export default {
     if (p === "/api/login" && request.method === "POST") return login(request);
     if (p === "/api/check-auth" && request.method === "GET") return checkAuth(request);
     
+    // APIs for Ads, Interval Link, and Redirect
     if (p === "/api/ads" && request.method === "GET") return getAds(env);
     if (p === "/api/ads" && request.method === "POST") return saveAds(request, env);
     
