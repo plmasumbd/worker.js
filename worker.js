@@ -12,10 +12,14 @@ export default {
     if (p.startsWith("/api/movies/") && request.method === "DELETE") return deleteMovie(request, env, p);
     if (p === "/api/login" && request.method === "POST") return login(request);
     if (p === "/api/check-auth" && request.method === "GET") return checkAuth(request);
+    
+    // APIs for Ads, Interval Link, and Redirect
     if (p === "/api/ads" && request.method === "GET") return getAds(env);
     if (p === "/api/ads" && request.method === "POST") return saveAds(request, env);
     
-    // Ad Redirect endpoints
+    if (p === "/api/interval-link" && request.method === "GET") return getIntervalLink(env);
+    if (p === "/api/interval-link" && request.method === "POST") return saveIntervalLink(request, env);
+
     if (p === "/api/ad-redirect" && request.method === "GET") return getAdRedirect(env);
     if (p === "/api/ad-redirect" && request.method === "POST") return saveAdRedirect(request, env);
 
@@ -258,7 +262,19 @@ async function saveAds(request, env) {
   return json({ success: true });
 }
 
-// ================= AD REDIRECT API =================
+async function getIntervalLink(env) {
+  const raw = await env.MOVIES.get("interval_link");
+  return json({ url: raw || "" });
+}
+
+async function saveIntervalLink(request, env) {
+  const auth = request.headers.get("X-Admin-Password");
+  if (auth !== ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
+  const b = await request.json();
+  await env.MOVIES.put("interval_link", b.url || "");
+  return json({ success: true });
+}
+
 async function getAdRedirect(env) {
   const raw = await env.MOVIES.get("ad_redirect_url");
   return json({ url: raw || "" });
@@ -375,7 +391,7 @@ function homePage() {
   parts.push('  try{');
   parts.push('    var r=await fetch("/api/ads");');
   parts.push('    var d=await r.json();');
-  parts.push('    if(d.code && d.code.trim() && !d.code.startsWith("http")){');
+  parts.push('    if(d.code && d.code.trim()){');
   parts.push('      injectAds("adTop", d.code);');
   parts.push('      injectAds("adBot", d.code);');
   parts.push('    }');
@@ -535,7 +551,6 @@ function watchPage(id) {
   parts.push('.adblock-content{background:#1c1c1c; padding:30px; border-radius:10px; border:2px solid #ff0040; max-width:450px; margin:20px; box-shadow:0 0 20px rgba(255,0,64,0.5);}');
   parts.push('.adblock-content h2{color:#ff0040; margin-bottom:15px; font-size:24px;}');
   
-  // ৫ সেকেন্ডের ইন্টারভ্যাল পপআপ CSS
   parts.push('.interstitial-modal{display:flex; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:10000; flex-direction:column; align-items:center; justify-content:center;}');
   parts.push('.interstitial-box{background:#1c1c1c; width:90%; max-width:700px; padding:20px; border-radius:12px; border:2px solid #ff0040; text-align:center; position:relative; box-shadow:0 0 30px rgba(255,0,64,0.4);}');
   parts.push('.interstitial-box h3{color:#fff; margin-bottom:15px; font-size:18px;}');
@@ -555,7 +570,7 @@ function watchPage(id) {
 
   parts.push('<div id="interstitialModal" class="interstitial-modal">');
   parts.push('  <div class="interstitial-box">');
-  parts.push('    <h3>আপনার ভিডিওটি লোড হচ্ছে... অনুগ্রহ করে বিজ্ঞাপনটি দেখুন</h3>');
+  parts.push('    <h3>আপনার ভিডিওটি লোড হচ্ছে... অনুগ্রহ করে অপেক্ষা করুন</h3>');
   parts.push('    <div class="ad-container" id="interstitialAdBox"></div>');
   parts.push('    <button id="skipBtn" class="skip-btn" disabled>অপেক্ষা করুন (৫)</button>');
   parts.push('  </div>');
@@ -652,17 +667,13 @@ function watchPage(id) {
   parts.push('  var skipBtn = document.getElementById("skipBtn");');
   
   parts.push('  try{');
-  parts.push('    var ar=await fetch("/api/ads");');
+  parts.push('    var ar=await fetch("/api/interval-link");');
   parts.push('    var ad=await ar.json();');
-  parts.push('    if(ad.code&&ad.code.trim()){');
-  parts.push('      if(ad.code.startsWith("http")){');
-  parts.push('        // ইন্টারভ্যাল লিংক হলে সেটি আইফ্রেমে লোড হবে');
-  parts.push('        adBox.innerHTML = \'<iframe src="\'+ad.code+\'" style="width:100%; height:100%; border:0;"></iframe>\';');
-  parts.push('      } else {');
-  parts.push('        injectAds("interstitialAdBox", ad.code);');
-  parts.push('      }');
+  parts.push('    if(ad.url && ad.url.trim()){');
+  parts.push('      // Interval Link থাকলে সেটি আইফ্রেমে লোড হবে');
+  parts.push('      adBox.innerHTML = \'<iframe src="\'+ad.url+\'" style="width:100%; height:100%; border:0;"></iframe>\';');
   parts.push('    } else {');
-  parts.push('      adBox.innerHTML = "<p style=\'color:#666\'>No Interval Link Set</p>";');
+  parts.push('      adBox.innerHTML = "<p style=\'color:#666\'>Video is loading...</p>";');
   parts.push('    }');
   parts.push('  }catch(e){}');
   
@@ -714,7 +725,7 @@ function watchPage(id) {
   parts.push('  if(!isAdmin){');
   parts.push('    try{');
   parts.push('      fetch("/api/ads").then(r=>r.json()).then(ad=>{');
-  parts.push('        if(ad.code && !ad.code.startsWith("http")) injectAds("adBox", ad.code);');
+  parts.push('        if(ad.code && ad.code.trim()) injectAds("adBox", ad.code);');
   parts.push('      });');
   parts.push('    }catch(e){}');
   parts.push('  }');
@@ -787,8 +798,9 @@ function adminPage() {
   parts.push('<div id="content" class="hidden">');
   parts.push('<div class="tabs">');
   parts.push('<button id="t1" class="active" data-tab="m">Movies</button>');
-  parts.push('<button id="t2" data-tab="a">Ad Code & Interval Link</button>');
-  parts.push('<button id="t3" data-tab="r">Ad Redirect</button>');
+  parts.push('<button id="t2" data-tab="ad">Ad Code</button>');
+  parts.push('<button id="t3" data-tab="il">Interval Link</button>');
+  parts.push('<button id="t4" data-tab="rd">Ad Redirect</button>');
   parts.push('</div>');
   
   parts.push('<div id="tm">');
@@ -833,18 +845,29 @@ function adminPage() {
   parts.push('<div class="card"><h2>All Movies</h2><div id="list"></div></div>');
   parts.push('</div>');
   
-  parts.push('<div id="ta" class="hidden">');
+  parts.push('<div id="tad" class="hidden">');
   parts.push('<div class="card">');
-  parts.push('<h2>Adsterra Ad Code / Interval Link</h2>');
-  parts.push('<p class="hint">Ad code paste করো অথবা ইন্টারভ্যাল লিংক (যেমন: https://... ) দাও। Watch page এ ৫ সেকেন্ডের পপআপে এটি দেখাবে।</p>');
-  parts.push('<label>Ad Code / Interval Link</label>');
+  parts.push('<h2>Adsterra Ad Code</h2>');
+  parts.push('<p class="hint">Ad code paste করো। Home ও Watch page এ auto বসবে।</p>');
+  parts.push('<label>Ad Code</label>');
   parts.push('<textarea id="ads" style="min-height:200px"></textarea>');
   parts.push('<button class="primary" id="adsSaveBtn">Save</button>');
   parts.push('<div id="adm" class="msg"></div>');
   parts.push('</div>');
   parts.push('</div>');
 
-  parts.push('<div id="tr" class="hidden">');
+  parts.push('<div id="til" class="hidden">');
+  parts.push('<div class="card">');
+  parts.push('<h2>Interval Link (৫ সেকেন্ডের পপআপ)</h2>');
+  parts.push('<p class="hint">এই লিংকটি ভিডিও প্লে হওয়ার আগে ৫ সেকেন্ডের জন্য লোড হবে। (যেমন: https://...)</p>');
+  parts.push('<label>Interval Link</label>');
+  parts.push('<input type="text" id="intervalLinkInput" placeholder="https://your-site.com">');
+  parts.push('<button class="primary" id="intervalLinkSaveBtn">Save</button>');
+  parts.push('<div id="ilm" class="msg"></div>');
+  parts.push('</div>');
+  parts.push('</div>');
+
+  parts.push('<div id="trd" class="hidden">');
   parts.push('<div class="card">');
   parts.push('<h2>Ad Redirect Link (দিনে ১ বার)</h2>');
   parts.push('<p class="hint">এই লিংকটি ইউজার দিনে প্রথমবার ভিডিওতে ক্লিক করলে রিডাইরেক্ট হবে।</p>');
@@ -867,10 +890,11 @@ function adminPage() {
   parts.push('  $("cb").onclick=reset;');
   parts.push('  $("logoutBtn").onclick=logout;');
   parts.push('  $("adsSaveBtn").onclick=saveAds;');
+  parts.push('  $("intervalLinkSaveBtn").onclick=saveIntervalLink;');
+  parts.push('  $("adRedirectSaveBtn").onclick=saveAdRedirect;');
   parts.push('  $("scrapeBtn").onclick=autoFetchWithPreview;');
   parts.push('  $("openLiveBtn").onclick=openLivePage;');
   parts.push('  $("parseBtn").onclick=parseSourceCode;');
-  parts.push('  $("adRedirectSaveBtn").onclick=saveAdRedirect;');
   parts.push('  document.querySelectorAll("[data-tab]").forEach(function(b){');
   parts.push('    b.onclick=function(){tab(b.getAttribute("data-tab"))};');
   parts.push('  });');
@@ -898,19 +922,22 @@ function adminPage() {
   parts.push('function show(){');
   parts.push('  $("login").classList.add("hidden");');
   parts.push('  $("content").classList.remove("hidden");');
-  parts.push('  loadList();loadAds();loadAdRedirect();');
+  parts.push('  loadList();loadAds();loadIntervalLink();loadAdRedirect();');
   parts.push('}');
   
   parts.push('function tab(n){');
   parts.push('  $("tm").classList.add("hidden");');
-  parts.push('  $("ta").classList.add("hidden");');
-  parts.push('  $("tr").classList.add("hidden");');
+  parts.push('  $("tad").classList.add("hidden");');
+  parts.push('  $("til").classList.add("hidden");');
+  parts.push('  $("trd").classList.add("hidden");');
   parts.push('  $("t1").classList.remove("active");');
   parts.push('  $("t2").classList.remove("active");');
   parts.push('  $("t3").classList.remove("active");');
+  parts.push('  $("t4").classList.remove("active");');
   parts.push('  if(n==="m"){$("tm").classList.remove("hidden");$("t1").classList.add("active")}');
-  parts.push('  if(n==="a"){$("ta").classList.remove("hidden");$("t2").classList.add("active")}');
-  parts.push('  if(n==="r"){$("tr").classList.remove("hidden");$("t3").classList.add("active")}');
+  parts.push('  if(n==="ad"){$("tad").classList.remove("hidden");$("t2").classList.add("active")}');
+  parts.push('  if(n==="il"){$("til").classList.remove("hidden");$("t3").classList.add("active")}');
+  parts.push('  if(n==="rd"){$("trd").classList.remove("hidden");$("t4").classList.add("active")}');
   parts.push('}');
   
   parts.push('function logout(){localStorage.removeItem("admin_token");location.reload()}');
@@ -1094,6 +1121,21 @@ function adminPage() {
   parts.push('  var code=$("ads").value;');
   parts.push('  var m=$("adm");');
   parts.push('  var r=await fetch("/api/ads",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({code:code})});');
+  parts.push('  if(r.ok){m.textContent="Saved";m.className="msg ok show"}');
+  parts.push('  else{m.textContent="Failed";m.className="msg err show"}');
+  parts.push('  setTimeout(function(){m.classList.remove("show")},2500);');
+  parts.push('}');
+
+  parts.push('async function loadIntervalLink(){');
+  parts.push('  var r=await fetch("/api/interval-link");');
+  parts.push('  var d=await r.json();');
+  parts.push('  $("intervalLinkInput").value=d.url||"";');
+  parts.push('}');
+
+  parts.push('async function saveIntervalLink(){');
+  parts.push('  var url=$("intervalLinkInput").value.trim();');
+  parts.push('  var m=$("ilm");');
+  parts.push('  var r=await fetch("/api/interval-link",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({url:url})});');
   parts.push('  if(r.ok){m.textContent="Saved";m.className="msg ok show"}');
   parts.push('  else{m.textContent="Failed";m.className="msg err show"}');
   parts.push('  setTimeout(function(){m.classList.remove("show")},2500);');
