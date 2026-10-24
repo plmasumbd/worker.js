@@ -15,6 +15,10 @@ export default {
     if (p === "/api/ads" && request.method === "GET") return getAds(env);
     if (p === "/api/ads" && request.method === "POST") return saveAds(request, env);
     
+    // Ad Redirect endpoints
+    if (p === "/api/ad-redirect" && request.method === "GET") return getAdRedirect(env);
+    if (p === "/api/ad-redirect" && request.method === "POST") return saveAdRedirect(request, env);
+
     if (p === "/api/movie" && request.method === "GET") return getSingleMovie(env, url);
     if (p === "/api/fetch-source" && request.method === "POST") return fetchSourceData(request);
 
@@ -254,6 +258,20 @@ async function saveAds(request, env) {
   return json({ success: true });
 }
 
+// ================= AD REDIRECT API =================
+async function getAdRedirect(env) {
+  const raw = await env.MOVIES.get("ad_redirect_url");
+  return json({ url: raw || "" });
+}
+
+async function saveAdRedirect(request, env) {
+  const auth = request.headers.get("X-Admin-Password");
+  if (auth !== ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
+  const b = await request.json();
+  await env.MOVIES.put("ad_redirect_url", (b.url || "").trim());
+  return json({ success: true });
+}
+
 function json(data, status) {
   return new Response(JSON.stringify(data), {
     status: status || 200,
@@ -354,39 +372,34 @@ function homePage() {
   parts.push('async function loadAds(){');
   parts.push('  var isAdmin = localStorage.getItem("admin_token");');
   parts.push('  if(isAdmin) return;');
-  
   parts.push('  try{');
   parts.push('    var r=await fetch("/api/ads");');
   parts.push('    var d=await r.json();');
-  parts.push('    if(d.code&&d.code.trim()){');
-  parts.push('      if(!d.code.startsWith("http")){');
-  parts.push('        injectAds("adTop", d.code);');
-  parts.push('        injectAds("adBot", d.code);');
-  parts.push('      }');
+  parts.push('    if(d.code && d.code.trim() && !d.code.startsWith("http")){');
+  parts.push('      injectAds("adTop", d.code);');
+  parts.push('      injectAds("adBot", d.code);');
   parts.push('    }');
   parts.push('  }catch(e){console.error("Ad error:", e);}');
   parts.push('}');
 
   parts.push('function handleCardClick(watchUrl){');
   parts.push('  var isAdmin = localStorage.getItem("admin_token");');
-  parts.push('  var lastRedirect = localStorage.getItem("last_ad_redirect");');
-  parts.push('  var today = new Date().toDateString();');
+  parts.push('  if(isAdmin) { window.location.href = watchUrl; return; }');
   
-  parts.push('  if(isAdmin || lastRedirect === today){');
-  parts.push('    // অ্যাডমিন অথবা আজ রিডাইরেক্ট হয়ে গেছে, সরাসরি যাবে');
-  parts.push('    window.location.href = watchUrl;');
-  parts.push('  } else {');
-  parts.push('    // দিনে প্রথমবার ক্লিক, তাই অ্যাড পেজে যাবে ৫ সেকেন্ডের জন্য');
-  parts.push('    localStorage.setItem("last_ad_redirect", today);');
-  parts.push('    fetch("/api/ads").then(r=>r.json()).then(d=>{');
-  parts.push('      if(d.code && d.code.startsWith("http")){');
-  parts.push('        window.location.href = d.code;');
+  parts.push('  var today = new Date().toDateString();');
+  parts.push('  var lastVisit = localStorage.getItem("last_ad_redirect_date");');
+  
+  parts.push('  if(lastVisit !== today) {');
+  parts.push('    localStorage.setItem("last_ad_redirect_date", today);');
+  parts.push('    fetch("/api/ad-redirect").then(r=>r.json()).then(d=>{');
+  parts.push('      if(d.url && d.url.length > 0) {');
+  parts.push('        window.location.href = d.url;');
   parts.push('      } else {');
   parts.push('        window.location.href = watchUrl;');
   parts.push('      }');
-  parts.push('    }).catch(()=>{');
-  parts.push('      window.location.href = watchUrl;');
-  parts.push('    });');
+  parts.push('    }).catch(()=>{ window.location.href = watchUrl; });');
+  parts.push('  } else {');
+  parts.push('    window.location.href = watchUrl;');
   parts.push('  }');
   parts.push('}');
 
@@ -415,9 +428,7 @@ function homePage() {
   parts.push('}');
   
   parts.push('function handleSearch(e){');
-  parts.push('  if(e.key === "Enter"){');
-  parts.push('    triggerSearch();');
-  parts.push('  }');
+  parts.push('  if(e.key === "Enter"){ triggerSearch(); }');
   parts.push('}');
   parts.push('function triggerSearch(){');
   parts.push('  var q = document.getElementById("searchInput").value.trim();');
@@ -430,29 +441,29 @@ function homePage() {
   parts.push('  currentPage = p;');
   parts.push('  var url = "/api/movies?page=" + p;');
   parts.push('  if(currentSearch) url += "&search=" + encodeURIComponent(currentSearch);');
-  
-  parts.push('  var r=await fetch(url);');
-  parts.push('  var d=await r.json();');
-  parts.push('  var g=document.getElementById("grid");');
-  parts.push('  g.innerHTML="";');
-  
-  parts.push('  if(!d.items.length){');
-  parts.push('    g.innerHTML=\'<div class="empty">No videos found!</div>\';');
-  parts.push('    document.getElementById("pager").innerHTML="";');
-  parts.push('    return;');
+  parts.push('  try {');
+  parts.push('    var r=await fetch(url);');
+  parts.push('    var d=await r.json();');
+  parts.push('    var g=document.getElementById("grid");');
+  parts.push('    g.innerHTML="";');
+  parts.push('    if(!d.items || !d.items.length){');
+  parts.push('      g.innerHTML=\'<div class="empty">No videos found!</div>\';');
+  parts.push('      document.getElementById("pager").innerHTML="";');
+  parts.push('      return;');
+  parts.push('    }');
+  parts.push('    d.items.forEach(function(m){');
+  parts.push('      var a=document.createElement("a");');
+  parts.push('      a.className="card";');
+  parts.push('      a.href="javascript:void(0)";');
+  parts.push('      var s=m.thumbnail?("background-image:url(\'" + m.thumbnail + "\')"):"";');
+  parts.push('      a.innerHTML=\'<div class="thumb" style="\'+s+\'"><div class="play">▶</div></div><div class="info"><h3>\'+esc(m.title)+\'</h3></div>\';');
+  parts.push('      a.onclick = function() { handleCardClick("/watch?id="+m.id); };');
+  parts.push('      g.appendChild(a);');
+  parts.push('    });');
+  parts.push('    pager(d.page,d.totalPages);');
+  parts.push('  } catch(err) {');
+  parts.push('    document.getElementById("grid").innerHTML = \'<div class="empty">Error loading videos. Please refresh.</div>\';');
   parts.push('  }');
-  
-  parts.push('  d.items.forEach(function(m){');
-  parts.push('    var a=document.createElement("a");');
-  parts.push('    a.className="card";');
-  parts.push('    a.href="javascript:void(0)";');
-  parts.push('    var s=m.thumbnail?("background-image:url(\'" + m.thumbnail + "\')"):"";');
-  parts.push('    a.innerHTML=\'<div class="thumb" style="\'+s+\'"><div class="play">▶</div></div><div class="info"><h3>\'+esc(m.title)+\'</h3></div>\';');
-  parts.push('    a.onclick = function() { handleCardClick("/watch?id="+m.id); };');
-  parts.push('    g.appendChild(a);');
-  parts.push('  });');
-  
-  parts.push('  pager(d.page,d.totalPages);');
   parts.push('}');
   
   parts.push('function pager(c,t){');
@@ -524,6 +535,7 @@ function watchPage(id) {
   parts.push('.adblock-content{background:#1c1c1c; padding:30px; border-radius:10px; border:2px solid #ff0040; max-width:450px; margin:20px; box-shadow:0 0 20px rgba(255,0,64,0.5);}');
   parts.push('.adblock-content h2{color:#ff0040; margin-bottom:15px; font-size:24px;}');
   
+  // ৫ সেকেন্ডের ইন্টারভ্যাল পপআপ CSS
   parts.push('.interstitial-modal{display:flex; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:10000; flex-direction:column; align-items:center; justify-content:center;}');
   parts.push('.interstitial-box{background:#1c1c1c; width:90%; max-width:700px; padding:20px; border-radius:12px; border:2px solid #ff0040; text-align:center; position:relative; box-shadow:0 0 30px rgba(255,0,64,0.4);}');
   parts.push('.interstitial-box h3{color:#fff; margin-bottom:15px; font-size:18px;}');
@@ -590,21 +602,13 @@ function watchPage(id) {
   parts.push('function detectAdBlocker(){');
   parts.push('  var isAdmin = localStorage.getItem("admin_token");');
   parts.push('  if(isAdmin) return;');
-  
   parts.push('  if (localStorage.getItem("adblockDismissed")) { return; }');
-  
   parts.push('  var s = document.createElement("script");');
   parts.push('  s.src = "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js";');
   parts.push('  s.async = true;');
-  
   parts.push('  var blocked = false;');
-  
-  parts.push('  s.onerror = function() {');
-  parts.push('    blocked = true;');
-  parts.push('  };');
-  
+  parts.push('  s.onerror = function() { blocked = true; };');
   parts.push('  document.head.appendChild(s);');
-  
   parts.push('  setTimeout(function(){');
   parts.push('    var isBlocked = !window.adsbygoogle || blocked;');
   parts.push('    if(isBlocked) {');
@@ -632,17 +636,12 @@ function watchPage(id) {
   parts.push('    document.getElementById("t").textContent=movieData.title;');
   
   parts.push('    var isAdmin = localStorage.getItem("admin_token");');
-  parts.push('    var today = new Date().toDateString();');
-  parts.push('    var lastRedirect = localStorage.getItem("last_ad_redirect");');
-  
-  parts.push('    // যদি অ্যাডমিন হয় অথবা আজ অ্যাড পেজে গিয়ে থাকে, তবে অ্যাড দেখাবে না');
-  parts.push('    if(isAdmin || lastRedirect === today){');
+  parts.push('    if(!isAdmin){');
+  parts.push('      showInterstitialAd();');
+  parts.push('    } else {');
   parts.push('      document.getElementById("interstitialModal").style.display = "none";');
   parts.push('      playVideo();');
-  parts.push('    } else {');
-  parts.push('      showInterstitialAd();');
   parts.push('    }');
-  parts.push('    ');
   parts.push('  } catch(err) {');
   parts.push('    document.getElementById("t").textContent="Video Not Found";');
   parts.push('  }');
@@ -651,18 +650,19 @@ function watchPage(id) {
   parts.push('async function showInterstitialAd(){');
   parts.push('  var adBox = document.getElementById("interstitialAdBox");');
   parts.push('  var skipBtn = document.getElementById("skipBtn");');
-  parts.push('  ');
+  
   parts.push('  try{');
   parts.push('    var ar=await fetch("/api/ads");');
   parts.push('    var ad=await ar.json();');
   parts.push('    if(ad.code&&ad.code.trim()){');
   parts.push('      if(ad.code.startsWith("http")){');
-  parts.push('        adBox.innerHTML = \'<a href="\'+ad.code+\'" target="_blank" style="display:block; width:100%; height:100%;"><img src="https://via.placeholder.com/600x250/ff0040/ffffff?text=Click+Here+To+Visit+Sponsor" style="max-width:100%; border-radius:8px;" /></a>\';');
+  parts.push('        // ইন্টারভ্যাল লিংক হলে সেটি আইফ্রেমে লোড হবে');
+  parts.push('        adBox.innerHTML = \'<iframe src="\'+ad.code+\'" style="width:100%; height:100%; border:0;"></iframe>\';');
   parts.push('      } else {');
   parts.push('        injectAds("interstitialAdBox", ad.code);');
   parts.push('      }');
   parts.push('    } else {');
-  parts.push('      adBox.innerHTML = "<p style=\'color:#666\'>No Ad Configured</p>";');
+  parts.push('      adBox.innerHTML = "<p style=\'color:#666\'>No Interval Link Set</p>";');
   parts.push('    }');
   parts.push('  }catch(e){}');
   
@@ -787,7 +787,8 @@ function adminPage() {
   parts.push('<div id="content" class="hidden">');
   parts.push('<div class="tabs">');
   parts.push('<button id="t1" class="active" data-tab="m">Movies</button>');
-  parts.push('<button id="t2" data-tab="a">Ads</button>');
+  parts.push('<button id="t2" data-tab="a">Ad Code & Interval Link</button>');
+  parts.push('<button id="t3" data-tab="r">Ad Redirect</button>');
   parts.push('</div>');
   
   parts.push('<div id="tm">');
@@ -834,12 +835,23 @@ function adminPage() {
   
   parts.push('<div id="ta" class="hidden">');
   parts.push('<div class="card">');
-  parts.push('<h2>Adsterra Ad Code / Direct Link</h2>');
-  parts.push('<p class="hint">Ad code paste করো অথবা সরাসরি কোনো ডিরেক্ট লিংক (যেমন: https://... ) দাও। (নোট: অ্যাডমিন হিসেবে লগইন থাকলে আপনার কাছে অ্যাড দেখাবে না)</p>');
-  parts.push('<label>Ad Code / Direct Link</label>');
+  parts.push('<h2>Adsterra Ad Code / Interval Link</h2>');
+  parts.push('<p class="hint">Ad code paste করো অথবা ইন্টারভ্যাল লিংক (যেমন: https://... ) দাও। Watch page এ ৫ সেকেন্ডের পপআপে এটি দেখাবে।</p>');
+  parts.push('<label>Ad Code / Interval Link</label>');
   parts.push('<textarea id="ads" style="min-height:200px"></textarea>');
   parts.push('<button class="primary" id="adsSaveBtn">Save</button>');
   parts.push('<div id="adm" class="msg"></div>');
+  parts.push('</div>');
+  parts.push('</div>');
+
+  parts.push('<div id="tr" class="hidden">');
+  parts.push('<div class="card">');
+  parts.push('<h2>Ad Redirect Link (দিনে ১ বার)</h2>');
+  parts.push('<p class="hint">এই লিংকটি ইউজার দিনে প্রথমবার ভিডিওতে ক্লিক করলে রিডাইরেক্ট হবে।</p>');
+  parts.push('<label>Redirect Link</label>');
+  parts.push('<input type="text" id="adRedirectInput" placeholder="https://your-ad-direct-link.com">');
+  parts.push('<button class="primary" id="adRedirectSaveBtn">Save</button>');
+  parts.push('<div id="arm" class="msg"></div>');
   parts.push('</div>');
   parts.push('</div>');
   
@@ -858,6 +870,7 @@ function adminPage() {
   parts.push('  $("scrapeBtn").onclick=autoFetchWithPreview;');
   parts.push('  $("openLiveBtn").onclick=openLivePage;');
   parts.push('  $("parseBtn").onclick=parseSourceCode;');
+  parts.push('  $("adRedirectSaveBtn").onclick=saveAdRedirect;');
   parts.push('  document.querySelectorAll("[data-tab]").forEach(function(b){');
   parts.push('    b.onclick=function(){tab(b.getAttribute("data-tab"))};');
   parts.push('  });');
@@ -885,16 +898,19 @@ function adminPage() {
   parts.push('function show(){');
   parts.push('  $("login").classList.add("hidden");');
   parts.push('  $("content").classList.remove("hidden");');
-  parts.push('  loadList();loadAds();');
+  parts.push('  loadList();loadAds();loadAdRedirect();');
   parts.push('}');
   
   parts.push('function tab(n){');
   parts.push('  $("tm").classList.add("hidden");');
   parts.push('  $("ta").classList.add("hidden");');
+  parts.push('  $("tr").classList.add("hidden");');
   parts.push('  $("t1").classList.remove("active");');
   parts.push('  $("t2").classList.remove("active");');
+  parts.push('  $("t3").classList.remove("active");');
   parts.push('  if(n==="m"){$("tm").classList.remove("hidden");$("t1").classList.add("active")}');
   parts.push('  if(n==="a"){$("ta").classList.remove("hidden");$("t2").classList.add("active")}');
+  parts.push('  if(n==="r"){$("tr").classList.remove("hidden");$("t3").classList.add("active")}');
   parts.push('}');
   
   parts.push('function logout(){localStorage.removeItem("admin_token");location.reload()}');
@@ -1078,6 +1094,25 @@ function adminPage() {
   parts.push('  var code=$("ads").value;');
   parts.push('  var m=$("adm");');
   parts.push('  var r=await fetch("/api/ads",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({code:code})});');
+  parts.push('  if(r.ok){m.textContent="Saved";m.className="msg ok show"}');
+  parts.push('  else{m.textContent="Failed";m.className="msg err show"}');
+  parts.push('  setTimeout(function(){m.classList.remove("show")},2500);');
+  parts.push('}');
+
+  parts.push('async function loadAdRedirect(){');
+  parts.push('  var r = await fetch("/api/ad-redirect");');
+  parts.push('  var d = await r.json();');
+  parts.push('  $("adRedirectInput").value = d.url || "";');
+  parts.push('}');
+
+  parts.push('async function saveAdRedirect(){');
+  parts.push('  var url = $("adRedirectInput").value.trim();');
+  parts.push('  var m = $("arm");');
+  parts.push('  var r = await fetch("/api/ad-redirect",{');
+  parts.push('    method:"POST",');
+  parts.push('    headers:{"Content-Type":"application/json","X-Admin-Password":token},');
+  parts.push('    body:JSON.stringify({url:url})');
+  parts.push('  });');
   parts.push('  if(r.ok){m.textContent="Saved";m.className="msg ok show"}');
   parts.push('  else{m.textContent="Failed";m.className="msg err show"}');
   parts.push('  setTimeout(function(){m.classList.remove("show")},2500);');
