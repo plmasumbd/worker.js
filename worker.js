@@ -523,6 +523,7 @@ function homePage() {
 }
 
 // ================= WATCH PAGE =================
+// ================= WATCH PAGE =================
 function watchPage(id) {
   const parts = [];
   parts.push('<!DOCTYPE html>');
@@ -545,11 +546,23 @@ function watchPage(id) {
   parts.push('.controls{display:flex;justify-content:flex-end;margin-top:10px}');
   parts.push('.fs-btn{background:#ff0040;color:#fff;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:bold;display:flex;align-items:center;gap:8px}');
   parts.push('.fs-btn:hover{background:#e60039}');
+  
+  // Pop-up CSS
   parts.push('.adblock-popup{display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:9999; align-items:center; justify-content:center; text-align:center; flex-direction:column;}');
   parts.push('.adblock-content{background:#1c1c1c; padding:30px; border-radius:10px; border:2px solid #ff0040; max-width:450px; margin:20px; box-shadow:0 0 20px rgba(255,0,64,0.5);}');
   parts.push('.adblock-content h2{color:#ff0040; margin-bottom:15px; font-size:24px;}');
+  
+  // ৫ সেকেন্ডের Interstitial Ad Modal CSS
+  parts.push('.interstitial-modal{display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:10000; flex-direction:column; align-items:center; justify-content:center;}');
+  parts.push('.interstitial-box{background:#1c1c1c; width:90%; max-width:700px; padding:20px; border-radius:12px; border:2px solid #ff0040; text-align:center; position:relative; box-shadow:0 0 30px rgba(255,0,64,0.4);}');
+  parts.push('.interstitial-box h3{color:#fff; margin-bottom:15px; font-size:18px;}');
+  parts.push('.ad-container{min-height:250px; display:flex; align-items:center; justify-content:center; background:#000; border-radius:8px; overflow:hidden; margin-bottom:20px;}');
+  parts.push('.skip-btn{background:#333; color:#fff; border:none; padding:12px 30px; border-radius:8px; font-size:16px; font-weight:bold; cursor:not-allowed; transition:0.3s; width:100%; max-width:300px;}');
+  parts.push('.skip-btn.active{background:#ff0040; cursor:pointer; box-shadow:0 0 15px rgba(255,0,64,0.5);}');
+  
   parts.push('</style></head><body>');
 
+  // Adblock Popup
   parts.push('<div id="adblockPopup" class="adblock-popup">');
   parts.push('  <div class="adblock-content">');
   parts.push('    <h2>⚠️ AdBlocker Detected!</h2>');
@@ -558,9 +571,18 @@ function watchPage(id) {
   parts.push('  </div>');
   parts.push('</div>');
 
+  // ৫ সেকেন্ডের Interstitial Ad Modal
+  parts.push('<div id="interstitialModal" class="interstitial-modal">');
+  parts.push('  <div class="interstitial-box">');
+  parts.push('    <h3>আপনার ভিডিওটি লোড হচ্ছে... অনুগ্রহ করে বিজ্ঞাপনটি দেখুন</h3>');
+  parts.push('    <div class="ad-container" id="interstitialAdBox"></div>');
+  parts.push('    <button id="skipBtn" class="skip-btn" disabled>অপেক্ষা করুন (৫)</button>');
+  parts.push('  </div>');
+  parts.push('</div>');
+
   parts.push('<header><a href="/" class="logo">AdultMovie</a><a href="/" class="back-btn">← Home</a></header>');
   parts.push('<div class="wrap">');
-  parts.push('<div class="player" id="pb"></div>');
+  parts.push('<div class="player" id="pb" style="display:none;"></div>'); // ভিডিও আগে হাইড থাকবে
   parts.push('<div class="controls" id="ctrl" style="display:none;"><button class="fs-btn" onclick="openFullscreen()">⛶ Full Screen</button></div>');
   parts.push('<div class="title" id="t">Loading...</div>');
   parts.push('<div class="ad" id="adBox"></div>');
@@ -619,450 +641,97 @@ function watchPage(id) {
   parts.push('}');
 
   parts.push('var id=new URLSearchParams(location.search).get("id");');
+  parts.push('var movieData = null;');
 
-  parts.push('async function go(){');
+  // ডাটা লোড করা
+  parts.push('async function loadData(){');
   parts.push('  if(!id){document.getElementById("t").textContent="ID not provided";return}');
   parts.push('  try {');
   parts.push('    var r = await fetch("/api/movie?id=" + id);');
   parts.push('    if(!r.ok) throw new Error("Not found");');
   parts.push('    var d = await r.json();');
-  parts.push('    var mv = d.movie;');
-  parts.push('    document.getElementById("t").textContent=mv.title;');
-  parts.push('    var pb=document.getElementById("pb");');
-  parts.push('    var direct=/\\.(mp4|webm|ogg|m3u8)(\\?|$)/i.test(mv.videoUrl);');
-  parts.push('    document.getElementById("ctrl").style.display="flex";');
-  parts.push('    if(direct){');
-  parts.push('      var v=document.createElement("video");');
-  parts.push('      v.src=mv.videoUrl;v.controls=true;v.autoplay=true;v.playsInline=true;');
-  parts.push('      pb.appendChild(v);');
-  parts.push('    }else{');
-  parts.push('      var f=document.createElement("iframe");');
-  parts.push('      f.src=mv.videoUrl;');
-  parts.push('      f.allow="autoplay;encrypted-media;picture-in-picture;fullscreen";');
-  parts.push('      f.allowFullscreen=true;');
-  parts.push('      f.referrerPolicy="no-referrer";');
-  parts.push('      pb.appendChild(f);');
+  parts.push('    movieData = d.movie;');
+  parts.push('    document.getElementById("t").textContent=movieData.title;');
+  parts.push('    ');
+  // চেক করা ইউজার অ্যাডমিন কি না
+  parts.push('    var isAdmin = localStorage.getItem("admin_token");');
+  parts.push('    if(!isAdmin){');
+  parts.push('      showInterstitialAd();'); // নরমাল ইউজার হলে অ্যাড দেখাও
+  parts.push('    } else {');
+  parts.push('      playVideo();'); // অ্যাডমিন হলে সোজা ভিডিও চালাও
   parts.push('    }');
-  parts.push('    try {');
-  parts.push('      var isAdmin = localStorage.getItem("admin_token");');
-  parts.push('      if(!isAdmin){');
-  parts.push('        var ar=await fetch("/api/ads");');
-  parts.push('        var ad=await ar.json();');
-  parts.push('        if(ad.code&&ad.code.trim())injectAds("adBox", ad.code);');
-  parts.push('      }');
-  parts.push('    } catch(e) {}');
   parts.push('  } catch(err) {');
   parts.push('    document.getElementById("t").textContent="Video Not Found";');
   parts.push('  }');
   parts.push('}');
 
+  // ৫ সেকেন্ডের অ্যাড পপআপ দেখানো
+  parts.push('async function showInterstitialAd(){');
+  parts.push('  var modal = document.getElementById("interstitialModal");');
+  parts.push('  var adBox = document.getElementById("interstitialAdBox");');
+  parts.push('  var skipBtn = document.getElementById("skipBtn");');
+  parts.push('  modal.style.display = "flex";');
+  
+  // API থেকে অ্যাড কোড আনা
+  parts.push('  try{');
+  parts.push('    var ar=await fetch("/api/ads");');
+  parts.push('    var ad=await ar.json();');
+  parts.push('    if(ad.code&&ad.code.trim()){');
+  parts.push('      injectAds("interstitialAdBox", ad.code);');
+  parts.push('    } else {');
+  parts.push('      adBox.innerHTML = "<p style=\'color:#666\'>No Ad Configured</p>";');
+  parts.push('    }');
+  parts.push('  }catch(e){}');
+  parts.push('  ');
+  // ৫ সেকেন্ডের কাউন্টডাউন টাইমার
+  parts.push('  var timeLeft = 5;');
+  parts.push('  skipBtn.textContent = "অপেক্ষা করুন (" + timeLeft + ")";');
+  parts.push('  var timer = setInterval(function(){');
+  parts.push('    timeLeft--;');
+  parts.push('    if(timeLeft > 0){');
+  parts.push('      skipBtn.textContent = "অপেক্ষা করুন (" + timeLeft + ")";');
+  parts.push('    } else {');
+  parts.push('      clearInterval(timer);');
+  parts.push('      skipBtn.textContent = "ভিডিও দেখুন ▶";');
+  parts.push('      skipBtn.classList.add("active");');
+  parts.push('      skipBtn.disabled = false;');
+  parts.push('      skipBtn.onclick = function(){');
+  parts.push('        modal.style.display = "none";'); // পপআপ বন্ধ
+  parts.push('        playVideo();'); // ভিডিও চালু
+  parts.push('      };');
+  parts.push('    }');
+  parts.push('  }, 1000);');
+  parts.push('}');
+
+  // ভিডিও প্লে করা
+  parts.push('function playVideo(){');
+  parts.push('  if(!movieData) return;');
+  parts.push('  var pb = document.getElementById("pb");');
+  parts.push('  pb.style.display = "block"; // ভিডিও কন্টেইনার শো করো');
+  parts.push('  document.getElementById("ctrl").style.display="flex";');
+  parts.push('  ');
+  parts.push('  var direct=/\\.(mp4|webm|ogg|m3u8)(\\?|$)/i.test(movieData.videoUrl);');
+  parts.push('  if(direct){');
+  parts.push('    var v=document.createElement("video");');
+  parts.push('    v.src=movieData.videoUrl;v.controls=true;v.autoplay=true;v.playsInline=true;');
+  parts.push('    pb.appendChild(v);');
+  parts.push('  }else{');
+  parts.push('    var f=document.createElement("iframe");');
+  parts.push('    f.src=movieData.videoUrl;');
+  parts.push('    f.allow="autoplay;encrypted-media;picture-in-picture;fullscreen";');
+  parts.push('    f.allowFullscreen=true;');
+  parts.push('    f.referrerPolicy="no-referrer";');
+  parts.push('    pb.appendChild(f);');
+  parts.push('  }');
+  parts.push('}');
+
   parts.push('detectAdBlocker();');
-  parts.push('go();');
+  parts.push('loadData();'); // পেজ লোড হলেই ডাটা নিয়ে অ্যাড দেখাবে
   parts.push('<\/script>');
   
-  // ✅ Adsterra Social Bar / Interstitial Script
+  // Adsterra Social Bar Script
   parts.push('<script data-cfasync="false" src="https://bauval.org/14/f274e379d9ec4f2627750ad4c07a4328"></script>');
   
-  parts.push('</body></html>');
-  return parts.join("\n");
-}
-
-// ================= ADMIN PAGE =================
-function adminPage() {
-  const parts = [];
-  parts.push('<!DOCTYPE html>');
-  parts.push('<html lang="bn"><head>');
-  parts.push('<meta charset="UTF-8">');
-  parts.push('<meta name="viewport" content="width=device-width,initial-scale=1">');
-  parts.push('<title>Admin - AdultMovie</title>');
-  parts.push('<style>');
-  parts.push('*{margin:0;padding:0;box-sizing:border-box}');
-  parts.push('body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#eee;min-height:100vh}');
-  parts.push('header{background:#1a1a1a;padding:16px 24px;display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #ff0040}');
-  parts.push('header h1{color:#ff0040;font-size:22px}');
-  parts.push('header a{color:#eee;text-decoration:none;padding:8px 14px;background:#333;border-radius:6px;font-size:14px}');
-  parts.push('.wrap{max-width:900px;margin:30px auto;padding:0 20px}');
-  parts.push('.card{background:#1c1c1c;border-radius:12px;padding:24px;margin-bottom:20px}');
-  parts.push('.card h2{color:#ff0040;margin-bottom:16px;font-size:18px}');
-  parts.push('label{display:block;margin-top:12px;font-size:14px;color:#aaa}');
-  parts.push('input,textarea{width:100%;padding:12px;margin-top:6px;background:#111;border:1px solid #333;border-radius:6px;color:#eee;font-size:15px;font-family:inherit}');
-  parts.push('textarea{resize:vertical;min-height:100px;font-family:monospace;font-size:13px}');
-  parts.push('input:focus,textarea:focus{outline:none;border-color:#ff0040}');
-  parts.push('button.primary{background:#ff0040;color:#fff;border:none;padding:12px 24px;border-radius:6px;cursor:pointer;font-weight:600;margin-top:20px;font-size:15px}');
-  parts.push('button.primary:hover{opacity:.9}');
-  parts.push('button.danger{background:#c00}');
-  parts.push('button.small{padding:6px 12px;font-size:12px;margin:0}');
-  parts.push('.item{display:flex;justify-content:space-between;align-items:center;padding:12px;background:#111;border-radius:6px;margin-bottom:8px;gap:12px;flex-wrap:wrap}');
-  parts.push('.item .info{flex:1;min-width:200px;display:flex;gap:12px;align-items:center}');
-  parts.push('.item .mini{width:70px;height:44px;border-radius:4px;flex-shrink:0;background:#333 center/cover no-repeat}');
-  parts.push('.item h4{font-size:14px}');
-  parts.push('.acts{display:flex;gap:6px}');
-  parts.push('.msg{padding:10px;border-radius:6px;margin-top:12px;display:none}');
-  parts.push('.msg.show{display:block}');
-  parts.push('.msg.ok{background:#164d2c;color:#b6ffb6}');
-  parts.push('.msg.err{background:#4d1616;color:#ffb6b6}');
-  parts.push('.hidden{display:none}');
-  parts.push('#login{max-width:400px;margin:100px auto}');
-  parts.push('.hint{font-size:12px;color:#666;margin-top:4px}');
-  parts.push('.tabs{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}');
-  parts.push('.tabs button{padding:10px 20px;background:#1c1c1c;color:#eee;border:1px solid #333;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600}');
-  parts.push('.tabs button.active{background:#ff0040;border-color:#ff0040}');
-  parts.push('.auto-box{background:#2a2a2a;border:1px dashed #ff9800;padding:15px;border-radius:8px;margin-bottom:20px}');
-  parts.push('.paste-box{background:#1a2a3a;border:1px dashed #00c853;padding:15px;border-radius:8px;margin-bottom:20px}');
-  parts.push('.preview-box{width:100%; height:400px; background:#000; border-radius:8px; border:2px solid #ff9800; margin-top:15px; display:none; position:relative; overflow:hidden;}');
-  parts.push('.preview-box iframe{width:100%; height:100%; border:0;}');
-  parts.push('.close-preview{position:absolute; top:5px; right:5px; background:#c00; color:#fff; border:none; padding:8px 12px; border-radius:4px; cursor:pointer; z-index:10; font-weight:bold;}');
-  parts.push('.ad-redirect-box{background:#2a1a2e;border:1px dashed #c060ff;padding:15px;border-radius:8px;margin-bottom:20px}');
-  parts.push('</style></head><body>');
-  parts.push('<header><h1>Admin Panel - AdultMovie</h1><a href="/">Home</a></header>');
-  parts.push('<div class="wrap">');
-
-  parts.push('<div id="login" class="card">');
-  parts.push('<h2>Login</h2>');
-  parts.push('<label>Password</label>');
-  parts.push('<input type="password" id="pwd">');
-  parts.push('<button class="primary" id="loginBtn">Login</button>');
-  parts.push('<div id="lm" class="msg"></div>');
-  parts.push('</div>');
-
-  parts.push('<div id="content" class="hidden">');
-  parts.push('<div class="tabs">');
-  parts.push('<button id="t1" class="active" data-tab="m">Movies</button>');
-  parts.push('<button id="t2" data-tab="a">Ads</button>');
-  parts.push('<button id="t3" data-tab="r">Ad Redirect</button>');
-  parts.push('</div>');
-
-  parts.push('<div id="tm">');
-  parts.push('<div class="card auto-box">');
-  parts.push('<h2 style="color:#fff;margin-bottom:10px;">⚡ Auto Extract from URL</h2>');
-  parts.push('<p class="hint" style="margin-bottom:10px;">লিংক দিন এবং ডাটা এক্সট্রাক্ট করুন।</p>');
-  parts.push('<input type="text" id="scrapeUrl" placeholder="https://example.com/video-page">');
-  parts.push('<div style="display:flex; gap:10px; flex-wrap:wrap;">');
-  parts.push('  <button class="primary" style="background:#ff9800; margin-top:10px;" id="scrapeBtn">Open & Extract</button>');
-  parts.push('  <button class="primary" style="background:#2196F3; margin-top:10px;" id="openLiveBtn">🔗 Open Page Live</button>');
-  parts.push('</div>');
-  parts.push('<div id="sm" class="msg" style="margin-top:10px;"></div>');
-  parts.push('<div id="livePreview" class="preview-box">');
-  parts.push('  <button class="close-preview" onclick="closePreview()">✖ Close</button>');
-  parts.push('  <iframe id="previewFrame" sandbox="allow-same-origin allow-scripts allow-popups allow-forms"></iframe>');
-  parts.push('</div>');
-  parts.push('</div>');
-
-  parts.push('<div class="card paste-box">');
-  parts.push('<h2 style="color:#00c853;margin-bottom:10px;">📋 Smart Paste (Manual Source Code)</h2>');
-  parts.push('<p class="hint" style="margin-bottom:10px;color:#aaddff;">পেজটি নিজে ওপেন করুন -> View Source করুন -> নিচের লাইনগুলো কপি করে এখানে পেস্ট করুন।</p>');
-  parts.push('<textarea id="sourceCode" placeholder="video_title: \'Example Title\',&#10;video_id: \'1234\',&#10;preview_url: \'https://image.jpg\',&#10;video_alt_url: \'https://video.mp4\'" style="min-height:120px;"></textarea>');
-  parts.push('<button class="primary" style="background:#00c853; margin-top:10px;" id="parseBtn">Extract & Fill Data</button>');
-  parts.push('<div id="pm" class="msg" style="margin-top:10px;"></div>');
-  parts.push('</div>');
-
-  parts.push('<div class="card">');
-  parts.push('<h2 id="ft">Add / Edit Movie</h2>');
-  parts.push('<input type="hidden" id="eid">');
-  parts.push('<label>Title</label>');
-  parts.push('<input type="text" id="title">');
-  parts.push('<label>Video URL / Embed</label>');
-  parts.push('<textarea id="vurl"></textarea>');
-  parts.push('<label>Thumbnail URL (optional)</label>');
-  parts.push('<input type="text" id="thumb">');
-  parts.push('<input type="hidden" id="videoIdField">');
-  parts.push('<button class="primary" id="sb">Add Movie</button>');
-  parts.push('<button class="primary hidden" style="background:#333" id="cb" type="button">Cancel</button>');
-  parts.push('<div id="am" class="msg"></div>');
-  parts.push('</div>');
-
-  parts.push('<div class="card"><h2>All Movies</h2><div id="list"></div></div>');
-  parts.push('</div>');
-
-  parts.push('<div id="ta" class="hidden">');
-  parts.push('<div class="card">');
-  parts.push('<h2>Adsterra Ad Code (Banner/In-page)</h2>');
-  parts.push('<p class="hint">Ad code paste করো। Home ও Watch page এ auto বসবে। (নোট: Social Bar / Interstitial কোড ইতিমধ্যেই সাইটে যুক্ত করা আছে)</p>');
-  parts.push('<label>Ad Code</label>');
-  parts.push('<textarea id="ads" style="min-height:200px"></textarea>');
-  parts.push('<button class="primary" id="adsSaveBtn">Save</button>');
-  parts.push('<div id="adm" class="msg"></div>');
-  parts.push('</div>');
-  parts.push('</div>');
-
-  parts.push('<div id="tr" class="hidden">');
-  parts.push('<div class="card ad-redirect-box">');
-  parts.push('<h2 style="color:#c060ff;">🎯 Ad Direct Redirect URL</h2>');
-  parts.push('<p class="hint" style="margin-bottom:10px; color:#ccccff;">এই URL-টাই ব্যবহার হবে যখন user কোনো movie card-এ ক্লিক করবে। Movie watch page নতুন tab-এ খুলবে, আর পুরনো tab এই ad link-এ redirect হবে।</p>');
-  parts.push('<label>Ad Direct Link</label>');
-  parts.push('<input type="text" id="adRedirectInput" placeholder="https://your-ad-direct-link.com/xyz">');
-  parts.push('<button class="primary" id="adRedirectSaveBtn" style="background:#c060ff;">Save</button>');
-  parts.push('<div id="arm" class="msg"></div>');
-  parts.push('</div>');
-  parts.push('</div>');
-
-  parts.push('<button class="primary danger" id="logoutBtn">Logout</button>');
-  parts.push('</div>');
-  parts.push('</div>');
-  parts.push('<script>');
-  parts.push('var token=localStorage.getItem("admin_token")||"";');
-  parts.push('function $(id){return document.getElementById(id)}');
-  parts.push('window.addEventListener("DOMContentLoaded",function(){');
-  parts.push('  $("loginBtn").onclick=doLogin;');
-  parts.push('  $("sb").onclick=saveMovie;');
-  parts.push('  $("cb").onclick=reset;');
-  parts.push('  $("logoutBtn").onclick=logout;');
-  parts.push('  $("adsSaveBtn").onclick=saveAds;');
-  parts.push('  $("scrapeBtn").onclick=autoFetchWithPreview;');
-  parts.push('  $("openLiveBtn").onclick=openLivePage;');
-  parts.push('  $("parseBtn").onclick=parseSourceCode;');
-  parts.push('  $("adRedirectSaveBtn").onclick=saveAdRedirect;');
-  parts.push('  document.querySelectorAll("[data-tab]").forEach(function(b){');
-  parts.push('    b.onclick=function(){tab(b.getAttribute("data-tab"))};');
-  parts.push('  });');
-  parts.push('  if(token)verify().then(function(ok){if(ok)show()});');
-  parts.push('});');
-
-  parts.push('async function verify(){');
-  parts.push('  try{');
-  parts.push('    var r=await fetch("/api/check-auth",{headers:{"X-Admin-Password":token}});');
-  parts.push('    return r.ok;');
-  parts.push('  }catch(e){return false}');
-  parts.push('}');
-
-  parts.push('async function doLogin(){');
-  parts.push('  var pwd=$("pwd").value;');
-  parts.push('  var m=$("lm");');
-  parts.push('  try{');
-  parts.push('    var r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pwd})});');
-  parts.push('    var d=await r.json();');
-  parts.push('    if(r.ok){token=d.token;localStorage.setItem("admin_token",token);show()}');
-  parts.push('    else{m.textContent=d.error||"Failed";m.className="msg err show"}');
-  parts.push('  }catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}');
-  parts.push('}');
-
-  parts.push('function show(){');
-  parts.push('  $("login").classList.add("hidden");');
-  parts.push('  $("content").classList.remove("hidden");');
-  parts.push('  loadList();loadAds();loadAdRedirect();');
-  parts.push('}');
-
-  parts.push('function tab(n){');
-  parts.push('  $("tm").classList.add("hidden");');
-  parts.push('  $("ta").classList.add("hidden");');
-  parts.push('  $("tr").classList.add("hidden");');
-  parts.push('  $("t1").classList.remove("active");');
-  parts.push('  $("t2").classList.remove("active");');
-  parts.push('  $("t3").classList.remove("active");');
-  parts.push('  if(n==="m"){$("tm").classList.remove("hidden");$("t1").classList.add("active")}');
-  parts.push('  if(n==="a"){$("ta").classList.remove("hidden");$("t2").classList.add("active")}');
-  parts.push('  if(n==="r"){$("tr").classList.remove("hidden");$("t3").classList.add("active")}');
-  parts.push('}');
-
-  parts.push('function logout(){localStorage.removeItem("admin_token");location.reload()}');
-
-  parts.push('function reset(){');
-  parts.push('  $("eid").value="";');
-  parts.push('  $("title").value="";');
-  parts.push('  $("vurl").value="";');
-  parts.push('  $("thumb").value="";');
-  parts.push('  $("videoIdField").value="";');
-  parts.push('  $("ft").textContent="Add / Edit Movie";');
-  parts.push('  $("sb").textContent="Add Movie";');
-  parts.push('  $("cb").classList.add("hidden");');
-  parts.push('}');
-
-  parts.push('function closePreview(){');
-  parts.push('  $("livePreview").style.display="none";');
-  parts.push('  $("previewFrame").src="";');
-  parts.push('}');
-
-  parts.push('function openLivePage(){');
-  parts.push('  var url=$("scrapeUrl").value.trim();');
-  parts.push('  var m=$("sm");');
-  parts.push('  if(!url){m.textContent="URL required";m.className="msg err show";return}');
-  parts.push('  window.open(url, "_blank");');
-  parts.push('}');
-
-  parts.push('async function autoFetchWithPreview(){');
-  parts.push('  var url=$("scrapeUrl").value.trim();');
-  parts.push('  var m=$("sm");');
-  parts.push('  var previewBox = $("livePreview");');
-  parts.push('  var frame = $("previewFrame");');
-  parts.push('  if(!url){m.textContent="URL required";m.className="msg err show";return}');
-  parts.push('  previewBox.style.display="block";');
-  parts.push('  frame.src = url;');
-  parts.push('  m.textContent="Extracting data in background...";m.className="msg show";m.style.color="#fff";');
-  parts.push('  try{');
-  parts.push('    var r=await fetch("/api/fetch-source",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:url})});');
-  parts.push('    var d=await r.json();');
-  parts.push('    if(r.ok && d.success){');
-  parts.push('      fillForm(d.data);');
-  parts.push('      m.textContent="Data fetched successfully!";m.className="msg ok show";');
-  parts.push('      m.style.color="#b6ffb6";');
-  parts.push('    }else{');
-  parts.push('      m.textContent=d.error || "Failed to fetch data. Please use Smart Paste.";m.className="msg err show";');
-  parts.push('      m.style.color="#ffb6b6";');
-  parts.push('    }');
-  parts.push('  }catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}');
-  parts.push('}');
-
-  parts.push('function parseSourceCode(){');
-  parts.push('  var text = $("sourceCode").value;');
-  parts.push('  var m = $("pm");');
-  parts.push('  if(!text){m.textContent="Please paste source code";m.className="msg err show";return}');
-  parts.push('  var getMatch = function(key) {');
-  parts.push('    var regex = new RegExp(key + "\\\\s*:\\\\s*[\'\\"]([^\'\\"]+)[\'\\"]", "i");');
-  parts.push('    var match = text.match(regex);');
-  parts.push('    if (match) return match[1];');
-  parts.push('    regex = new RegExp(\'"\' + key + \'"\\\\s*:\\\\s*"([^"]+)"\', "i");');
-  parts.push('    match = text.match(regex);');
-  parts.push('    return match ? match[1] : "";');
-  parts.push('  };');
-  parts.push('  var title = getMatch(\'video_title\');');
-  parts.push('  var vid = getMatch(\'video_id\');');
-  parts.push('  var img = getMatch(\'preview_url\') || getMatch(\'preview_url1\');');
-  parts.push('  var vurl = getMatch(\'video_alt_url\') || getMatch(\'video_url\');');
-  parts.push('  if(vurl){');
-  parts.push('    fillForm({title: title, id: vid, thumbnail: img, videoUrl: vurl});');
-  parts.push('    m.textContent="Data extracted and filled successfully!";m.className="msg ok show";');
-  parts.push('    m.style.color="#b6ffb6";');
-  parts.push('  } else {');
-  parts.push('    m.textContent="Could not find video link in the pasted code.";m.className="msg err show";');
-  parts.push('    m.style.color="#ffb6b6";');
-  parts.push('  }');
-  parts.push('}');
-
-  parts.push('function fillForm(data){');
-  parts.push('  $("title").value = data.title || "";');
-  parts.push('  $("vurl").value = data.videoUrl || "";');
-  parts.push('  $("thumb").value = data.thumbnail || "";');
-  parts.push('  $("videoIdField").value = data.id || "";');
-  parts.push('}');
-
-  parts.push('async function saveMovie(){');
-  parts.push('  var eid=$("eid").value;');
-  parts.push('  var title=$("title").value.trim();');
-  parts.push('  var vurl=$("vurl").value.trim();');
-  parts.push('  var thumb=$("thumb").value.trim();');
-  parts.push('  var vid=$("videoIdField").value.trim();');
-  parts.push('  var m=$("am");');
-  parts.push('  if(!title||!vurl){m.textContent="Title and URL required";m.className="msg err show";return}');
-  parts.push('  var u=eid?"/api/movies/update":"/api/movies";');
-  parts.push('  var p={title:title,videoUrl:vurl,thumbnail:thumb};');
-  parts.push('  if(eid)p.id=eid;');
-  parts.push('  if(!eid && vid) p.videoId = vid;');
-  parts.push('  try{');
-  parts.push('    var r=await fetch(u,{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify(p)});');
-  parts.push('    var d=await r.json();');
-  parts.push('    if(r.ok){');
-  parts.push('      m.textContent=eid?"Updated":"Added";');
-  parts.push('      m.className="msg ok show";');
-  parts.push('      reset();loadList();');
-  parts.push('      setTimeout(function(){m.classList.remove("show")},2500);');
-  parts.push('    }else{m.textContent=d.error||"Failed";m.className="msg err show"}');
-  parts.push('  }catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}');
-  parts.push('}');
-
-  parts.push('async function loadList(){');
-  parts.push('  var p=1,all=[];');
-  parts.push('  while(true){');
-  parts.push('    var r=await fetch("/api/movies?page="+p);');
-  parts.push('    var d=await r.json();');
-  parts.push('    all=all.concat(d.items);');
-  parts.push('    if(p>=d.totalPages)break;');
-  parts.push('    p++;');
-  parts.push('  }');
-  parts.push('  var el=$("list");');
-  parts.push('  if(!all.length){el.innerHTML=\'<p style="color:#666">No movies</p>\';return}');
-  parts.push('  el.innerHTML="";');
-  parts.push('  all.forEach(function(m){');
-  parts.push('    var s=m.thumbnail?("background-image:url(\'" + m.thumbnail + "\')"):"";');
-  parts.push('    var d=document.createElement("div");');
-  parts.push('    d.className="item";');
-  parts.push('    d.innerHTML=\'<div class="info"><div class="mini" style="\'+s+\'"></div><h4>\'+esc(m.title)+\'</h4></div>\';');
-  parts.push('    var acts=document.createElement("div");');
-  parts.push('    acts.className="acts";');
-  parts.push('    var eb=document.createElement("button");');
-  parts.push('    eb.className="primary small";');
-  parts.push('    eb.textContent="Edit";');
-  parts.push('    eb.onclick=function(){editMovie(m.id)};');
-  parts.push('    var db=document.createElement("button");');
-  parts.push('    db.className="primary small danger";');
-  parts.push('    db.textContent="Delete";');
-  parts.push('    db.onclick=function(){delMovie(m.id)};');
-  parts.push('    acts.appendChild(eb);');
-  parts.push('    acts.appendChild(db);');
-  parts.push('    d.appendChild(acts);');
-  parts.push('    el.appendChild(d);');
-  parts.push('  });');
-  parts.push('}');
-
-  parts.push('async function editMovie(id){');
-  parts.push('  var p=1,all=[];');
-  parts.push('  while(true){');
-  parts.push('    var r=await fetch("/api/movies?page="+p);');
-  parts.push('    var d=await r.json();');
-  parts.push('    all=all.concat(d.items);');
-  parts.push('    if(p>=d.totalPages)break;');
-  parts.push('    p++;');
-  parts.push('  }');
-  parts.push('  var m=all.find(function(x){return x.id===id});');
-  parts.push('  if(!m)return;');
-  parts.push('  $("eid").value=m.id;');
-  parts.push('  $("title").value=m.title;');
-  parts.push('  $("vurl").value=m.videoUrl;');
-  parts.push('  $("thumb").value=m.thumbnail||"";');
-  parts.push('  $("videoIdField").value="";');
-  parts.push('  $("ft").textContent="Edit Movie";');
-  parts.push('  $("sb").textContent="Update";');
-  parts.push('  $("cb").classList.remove("hidden");');
-  parts.push('  window.scrollTo({top:0,behavior:"smooth"});');
-  parts.push('}');
-
-  parts.push('async function delMovie(id){');
-  parts.push('  if(!confirm("Delete?"))return;');
-  parts.push('  var r=await fetch("/api/movies/"+id,{method:"DELETE",headers:{"X-Admin-Password":token}});');
-  parts.push('  if(r.ok)loadList();');
-  parts.push('}');
-
-  parts.push('async function loadAds(){');
-  parts.push('  var r=await fetch("/api/ads");');
-  parts.push('  var d=await r.json();');
-  parts.push('  $("ads").value=d.code||"";');
-  parts.push('}');
-
-  parts.push('async function saveAds(){');
-  parts.push('  var code=$("ads").value;');
-  parts.push('  var m=$("adm");');
-  parts.push('  var r=await fetch("/api/ads",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({code:code})});');
-  parts.push('  if(r.ok){m.textContent="Saved";m.className="msg ok show"}');
-  parts.push('  else{m.textContent="Failed";m.className="msg err show"}');
-  parts.push('  setTimeout(function(){m.classList.remove("show")},2500);');
-  parts.push('}');
-
-  parts.push('async function loadAdRedirect(){');
-  parts.push('  try{');
-  parts.push('    var r = await fetch("/api/ad-redirect");');
-  parts.push('    var d = await r.json();');
-  parts.push('    $("adRedirectInput").value = d.url || "";');
-  parts.push('  }catch(e){}');
-  parts.push('}');
-
-  parts.push('async function saveAdRedirect(){');
-  parts.push('  var url = $("adRedirectInput").value.trim();');
-  parts.push('  var m = $("arm");');
-  parts.push('  var r = await fetch("/api/ad-redirect",{');
-  parts.push('    method:"POST",');
-  parts.push('    headers:{"Content-Type":"application/json","X-Admin-Password":token},');
-  parts.push('    body:JSON.stringify({url:url})');
-  parts.push('  });');
-  parts.push('  if(r.ok){m.textContent="Ad Redirect URL Saved";m.className="msg ok show"}');
-  parts.push('  else{m.textContent="Failed";m.className="msg err show"}');
-  parts.push('  setTimeout(function(){m.classList.remove("show")},2500);');
-  parts.push('}');
-
-  parts.push('function esc(s){');
-  parts.push('  return String(s).replace(/[&<>]/g,function(c){');
-  parts.push('    return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c];');
-  parts.push('  });');
-  parts.push('}');
-  parts.push('<\/script>');
   parts.push('</body></html>');
   return parts.join("\n");
 }
