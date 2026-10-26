@@ -146,7 +146,7 @@ function autoThumb(url) {
   return "";
 }
 
-// ================= STABLE HASH (for deterministic shuffle) =================
+// ================= STABLE HASH =================
 function hashString(str) {
   let h = 2166136261;
   for (let i = 0; i < str.length; i++) {
@@ -155,7 +155,8 @@ function hashString(str) {
   }
   return h >>> 0;
 }
-// ================= API: LIST MOVIES =================
+
+// ================= API: LIST MOVIES (FIXED — No Duplicates) =================
 async function listMovies(env, url) {
   const page = parseInt(url.searchParams.get("page") || "1");
   const search = (url.searchParams.get("search") || "").toLowerCase().trim();
@@ -175,13 +176,12 @@ async function listMovies(env, url) {
   }
 
   if (!noShuffle) {
-    // ✅ STEP 1: সব video এর stable hash বের করি
-    // watched হলেও hash একই থাকবে — শুধু "watched priority" যোগ হবে
+    // ✅ Fix: watched flag কে sort এর মধ্যে handle করি (আলাদা push না)
+    // এতে watched video শেষে যায়, কিন্তু বাকি সব video এর position FIXED থাকে
+    // ফলাফল: Page 1, 2, 3, 4 এ কোনো video কখনো repeat হয় না
     const scored = list.map(m => {
       const baseHash = hashString(String(m.id) + "|" + seed);
       const isWatched = watchedSet.has(String(m.id));
-      // watched হলে priority = 1 (শেষে), unwatched হলে 0 (আগে)
-      // 🎯 গুরুত্বপূর্ণ: baseHash সবসময় same থাকে, watched flag শুধু group ঠিক করে
       return {
         movie: m,
         watched: isWatched ? 1 : 0,
@@ -189,10 +189,12 @@ async function listMovies(env, url) {
       };
     });
 
-    // ✅ STEP 2: প্রথমে watched (0 আগে, 1 পরে), তারপর hash দিয়ে stable sort
     scored.sort((a, b) => {
-      if (a.watched !== b.watched) return a.watched - b.watched; // unwatched আগে
+      // প্রথমে unwatched (0), তারপর watched (1)
+      if (a.watched !== b.watched) return a.watched - b.watched;
+      // তারপর hash দিয়ে stable sort
       if (a.hash !== b.hash) return a.hash - b.hash;
+      // tie-breaker
       return String(a.movie.id).localeCompare(String(b.movie.id));
     });
 
@@ -202,33 +204,12 @@ async function listMovies(env, url) {
   const total = list.length;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const start = (page - 1) * PAGE_SIZE;
-  return json({ items: list.slice(start, start + PAGE_SIZE), page: page, totalPages: pages, total: total });
-}
-    // - seed same হলে order same (pagination এ repeat নেই)
-    // - seed নতুন হলে (reload এ) order নতুন
-    list.sort((a, b) => {
-      const ha = hashString(String(a.id) + "|" + seed);
-      const hb = hashString(String(b.id) + "|" + seed);
-      if (ha !== hb) return ha - hb;
-      return String(a.id).localeCompare(String(b.id));
-    });
-
-    // ✅ Watched videos শেষে push (order না ভেঙে)
-    if (watchedParam) {
-      const watchedSet = new Set(watchedParam.split(",").map(x => x.trim()).filter(Boolean));
-      const unwatched = [], watched = [];
-      for (const m of list) {
-        if (watchedSet.has(String(m.id))) watched.push(m);
-        else unwatched.push(m);
-      }
-      list = unwatched.concat(watched);
-    }
-  }
-
-  const total = list.length;
-  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const start = (page - 1) * PAGE_SIZE;
-  return json({ items: list.slice(start, start + PAGE_SIZE), page: page, totalPages: pages, total: total });
+  return json({ 
+    items: list.slice(start, start + PAGE_SIZE), 
+    page: page, 
+    totalPages: pages, 
+    total: total 
+  });
 }
 
 async function addMovie(request, env) {
@@ -408,12 +389,10 @@ function homePage() {
   parts.push('</div>');
 
   parts.push('<script>');
-  // ✅ Session seed: page load হলেই নতুন (refresh করলে নতুন order), pagination এর মধ্যে fixed
   parts.push('var SESSION_SEED = Math.random().toString(36).substring(2, 12);');
   parts.push('var currentPage = 1;');
   parts.push('var currentSearch = "";');
   
-  // ✅ Watched videos helpers
   parts.push('function getWatchedIds(){');
   parts.push('  try{ return JSON.parse(localStorage.getItem("watched_ids")||"[]"); }');
   parts.push('  catch(e){ return []; }');
@@ -499,7 +478,6 @@ function homePage() {
   parts.push('  load(1);');
   parts.push('}');
 
-  // ✅ load(): seed + watched pathai, watched হলে badge দেখাই
   parts.push('async function load(p){');
   parts.push('  currentPage = p;');
   parts.push('  var watchedIds = getWatchedIds().join(",");');
@@ -649,7 +627,6 @@ function watchPage(id) {
   parts.push('</div>');
 
   parts.push('<script>');
-  // ✅ Watched marker
   parts.push('function markWatched(id){');
   parts.push('  try{');
   parts.push('    var arr = JSON.parse(localStorage.getItem("watched_ids")||"[]");');
@@ -786,7 +763,6 @@ parts.push('}');
 
   parts.push('function playVideo(){');
   parts.push('  if(!movieData) return;');
-  // ✅ watched হিসেবে mark
   parts.push('  markWatched(movieData.id);');
   
   parts.push('  var pb = document.getElementById("pb");');
@@ -1119,7 +1095,6 @@ function adminPage() {
   parts.push('  }catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}');
   parts.push('}');
   
-  // ✅ Admin এর জন্য noshuffle=1 (original order এ সব দেখাবে, repeat ছাড়া)
   parts.push('async function loadList(){');
   parts.push('  var p=1,all=[];');
   parts.push('  while(true){');
