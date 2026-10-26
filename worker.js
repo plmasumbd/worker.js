@@ -146,20 +146,61 @@ function autoThumb(url) {
   return "";
 }
 
+// ================= STABLE HASH (for deterministic shuffle) =================
+function hashString(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
 // ================= API: LIST MOVIES =================
 async function listMovies(env, url) {
   const page = parseInt(url.searchParams.get("page") || "1");
   const search = (url.searchParams.get("search") || "").toLowerCase().trim();
-  
+  const seed = url.searchParams.get("seed") || "";
+  const watchedParam = url.searchParams.get("watched") || "";
+  const noShuffle = url.searchParams.get("noshuffle") === "1"; // admin এর জন্য
+
   const raw = await env.MOVIES.get("movie_list");
   let list = raw ? JSON.parse(raw) : [];
 
   if (search) {
-    list = list.filter(m => m.title.toLowerCase().includes(search));
+    // Search এর সময় watched কে শেষে পাঠাই, কিন্তু shuffle করি না
+    if (watchedParam) {
+      const watchedSet = new Set(watchedParam.split(",").map(x => x.trim()).filter(Boolean));
+      const unwatched = [], watched = [];
+      for (const m of list) {
+        if (watchedSet.has(String(m.id))) watched.push(m);
+        else unwatched.push(m);
+      }
+      list = unwatched.concat(watched);
+    }
+  } else if (noShuffle) {
+    // Admin panel এর জন্য: shuffle করি না, শুধু original order
+    // কিছু করি না
   } else {
-    for (let i = list.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [list[i], list[j]] = [list[j], list[i]];
+    // ✅ Deterministic shuffle based on (id + seed)
+    // - seed same হলে order same (pagination এ repeat নেই)
+    // - seed নতুন হলে (reload এ) order নতুন
+    list.sort((a, b) => {
+      const ha = hashString(String(a.id) + "|" + seed);
+      const hb = hashString(String(b.id) + "|" + seed);
+      if (ha !== hb) return ha - hb;
+      return String(a.id).localeCompare(String(b.id));
+    });
+
+    // ✅ Watched videos শেষে push (order না ভেঙে)
+    if (watchedParam) {
+      const watchedSet = new Set(watchedParam.split(",").map(x => x.trim()).filter(Boolean));
+      const unwatched = [], watched = [];
+      for (const m of list) {
+        if (watchedSet.has(String(m.id))) watched.push(m);
+        else unwatched.push(m);
+      }
+      list = unwatched.concat(watched);
     }
   }
 
@@ -304,10 +345,11 @@ function homePage() {
   parts.push('.search-box button{background:#ff0040; color:#fff; border:none; padding:10px 20px; border-radius:6px; cursor:pointer; font-weight:bold;}');
   parts.push('.box{max-width:1300px;margin:0 auto;padding:30px 20px}');
   parts.push('.grid{display:grid;gap:20px;grid-template-columns:repeat(auto-fill,minmax(200px,1fr))}');
-  parts.push('.card{background:#1c1c1c;border-radius:10px;overflow:hidden;text-decoration:none;color:#eee;display:block;transition:.3s;cursor:pointer}');
+  parts.push('.card{background:#1c1c1c;border-radius:10px;overflow:hidden;text-decoration:none;color:#eee;display:block;transition:.3s;cursor:pointer;position:relative}');
   parts.push('.card:hover{transform:translateY(-5px);box-shadow:0 10px 25px rgba(255,0,64,.3)}');
   parts.push('.thumb{width:100%;aspect-ratio:16/9;background:#333 center/cover no-repeat;position:relative}');
   parts.push('.play{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:50px;height:50px;background:rgba(255,0,64,.9);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;color:#fff}');
+  parts.push('.watched-badge{position:absolute;top:6px;right:6px;background:#00c853;color:#000;font-size:11px;font-weight:bold;padding:3px 8px;border-radius:10px;z-index:2}');
   parts.push('.info{padding:12px}');
   parts.push('.info h3{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}');
   parts.push('.pager{display:flex;justify-content:center;gap:8px;margin-top:40px;flex-wrap:wrap}');
@@ -345,8 +387,25 @@ function homePage() {
   parts.push('</div>');
 
   parts.push('<script>');
+  // ✅ Session seed: page load হলেই নতুন (refresh করলে নতুন order), pagination এর মধ্যে fixed
+  parts.push('var SESSION_SEED = Math.random().toString(36).substring(2, 12);');
   parts.push('var currentPage = 1;');
   parts.push('var currentSearch = "";');
+  
+  // ✅ Watched videos helpers
+  parts.push('function getWatchedIds(){');
+  parts.push('  try{ return JSON.parse(localStorage.getItem("watched_ids")||"[]"); }');
+  parts.push('  catch(e){ return []; }');
+  parts.push('}');
+  parts.push('function markWatched(id){');
+  parts.push('  try{');
+  parts.push('    var arr = getWatchedIds();');
+  parts.push('    var sid = String(id);');
+  parts.push('    if(arr.indexOf(sid) === -1) arr.push(sid);');
+  parts.push('    if(arr.length > 500) arr = arr.slice(-500);');
+  parts.push('    localStorage.setItem("watched_ids", JSON.stringify(arr));');
+  parts.push('  }catch(e){}');
+  parts.push('}');
   
   parts.push('function injectAds(containerId, code){');
   parts.push('  var container=document.getElementById(containerId);');
@@ -419,9 +478,12 @@ function homePage() {
   parts.push('  load(1);');
   parts.push('}');
 
+  // ✅ load(): seed + watched pathai, watched হলে badge দেখাই
   parts.push('async function load(p){');
   parts.push('  currentPage = p;');
-  parts.push('  var url = "/api/movies?page=" + p;');
+  parts.push('  var watchedIds = getWatchedIds().join(",");');
+  parts.push('  var url = "/api/movies?page=" + p + "&seed=" + encodeURIComponent(SESSION_SEED);');
+  parts.push('  if(watchedIds) url += "&watched=" + encodeURIComponent(watchedIds);');
   parts.push('  if(currentSearch) url += "&search=" + encodeURIComponent(currentSearch);');
   parts.push('  try {');
   parts.push('    var r=await fetch(url);');
@@ -433,12 +495,17 @@ function homePage() {
   parts.push('      document.getElementById("pager").innerHTML="";');
   parts.push('      return;');
   parts.push('    }');
+  parts.push('    var watchedSet = {};');
+  parts.push('    getWatchedIds().forEach(function(x){ watchedSet[String(x)] = true; });');
   parts.push('    d.items.forEach(function(m){');
   parts.push('      var a=document.createElement("a");');
   parts.push('      a.className="card";');
   parts.push('      a.href="javascript:void(0)";');
   parts.push('      var s=m.thumbnail?("background-image:url(\'" + m.thumbnail + "\')"):"";');
-  parts.push('      a.innerHTML=\'<div class="thumb" style="\'+s+\'"><div class="play">▶</div></div><div class="info"><h3>\'+esc(m.title)+\'</h3></div>\';');
+  parts.push('      var isW = watchedSet[String(m.id)];');
+  parts.push('      var badge = isW ? \'<div class="watched-badge">✓ Watched</div>\' : \'\';');
+  parts.push('      a.innerHTML=\'<div class="thumb" style="\'+s+\'">\'+badge+\'<div class="play">▶</div></div><div class="info"><h3>\'+esc(m.title)+\'</h3></div>\';');
+  parts.push('      if(isW) a.style.opacity="0.65";');
   parts.push('      a.onclick = function() { handleCardClick("/watch?id="+m.id); };');
   parts.push('      g.appendChild(a);');
   parts.push('    });');
@@ -488,6 +555,7 @@ function homePage() {
   parts.push('</body></html>');
   return parts.join("\n");
 }
+
 // ================= WATCH PAGE =================
 function watchPage(id) {
   const parts = [];
@@ -516,14 +584,12 @@ function watchPage(id) {
   parts.push('.adblock-content{background:#1c1c1c; padding:30px; border-radius:10px; border:2px solid #ff0040; max-width:450px; margin:20px; box-shadow:0 0 20px rgba(255,0,64,0.5);}');
   parts.push('.adblock-content h2{color:#ff0040; margin-bottom:15px; font-size:24px;}');
   
-  // Modal CSS Fix for Mobile
   parts.push('.interstitial-modal{display:flex; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:10000; flex-direction:column; align-items:center; justify-content:center; padding:10px;}');
   parts.push('.interstitial-box{background:#1c1c1c; width:100%; max-width:800px; height:100%; max-height:95vh; padding:15px; border-radius:12px; border:2px solid #ff0040; text-align:center; display:flex; flex-direction:column;}');
   parts.push('.interstitial-box h3{color:#fff; margin-bottom:10px; font-size:18px; flex-shrink:0;}');
   parts.push('.ad-container{flex:1; width:100%; min-height:200px; display:flex; align-items:center; justify-content:center; background:#000; border-radius:8px; overflow:hidden; margin-bottom:10px;}');
   parts.push('.ad-container iframe{width:100%; height:100%; border:0;}');
   
-  // Button CSS
   parts.push('.btn-row{display:flex; gap:10px; width:100%; flex-shrink:0; flex-wrap:wrap;}');
   parts.push('.action-btn{border:none; padding:14px 10px; border-radius:8px; font-size:16px; font-weight:bold; transition:0.3s; flex:1; min-width:120px;}');
   parts.push('.btn-ad{background:#2196F3; color:#fff; cursor:pointer;}');
@@ -542,7 +608,6 @@ function watchPage(id) {
   parts.push('  </div>');
   parts.push('</div>');
 
-  // Interstitial Modal HTML - Buttons are now pre-built in HTML
   parts.push('<div id="interstitialModal" class="interstitial-modal">');
   parts.push('  <div class="interstitial-box">');
   parts.push('    <h3>Your video is loading... Please wait</h3>');
@@ -563,6 +628,17 @@ function watchPage(id) {
   parts.push('</div>');
 
   parts.push('<script>');
+  // ✅ Watched marker
+  parts.push('function markWatched(id){');
+  parts.push('  try{');
+  parts.push('    var arr = JSON.parse(localStorage.getItem("watched_ids")||"[]");');
+  parts.push('    var sid = String(id);');
+  parts.push('    if(arr.indexOf(sid) === -1) arr.push(sid);');
+  parts.push('    if(arr.length > 500) arr = arr.slice(-500);');
+  parts.push('    localStorage.setItem("watched_ids", JSON.stringify(arr));');
+  parts.push('  }catch(e){}');
+  parts.push('}');
+  
   parts.push('function injectAds(id, code){');
   parts.push('  var c=document.getElementById(id);');
   parts.push('  if(!c)return;');
@@ -645,12 +721,10 @@ parts.push('  try{');
 parts.push('    var ar=await fetch("/api/interval-link");');
 parts.push('    var ad=await ar.json();');
 
-// লিংক আছে কি না চেক করা হচ্ছে
 parts.push('    if(ad.url && ad.url.trim() && (ad.url.trim().startsWith("http://") || ad.url.trim().startsWith("https://"))){');
 parts.push('      adUrl = ad.url.trim();');
 parts.push('      adBox.innerHTML = \'<iframe src="\'+adUrl+\'" allowfullscreen></iframe>\';');
 parts.push('    } else {');
-// লিংক না থাকলে সরাসরি ভিডিও প্লে হবে, পপআপ আসবে না
 parts.push('      document.getElementById("interstitialModal").style.display = "none";');
 parts.push('      playVideo();');
 parts.push('      return;'); 
@@ -661,7 +735,6 @@ parts.push('    playVideo();');
 parts.push('    return;');
 parts.push('  }');
 
-// এখান থেকে নিচের কোড শুধু তখনই রান হবে যখন লিংক থাকবে
 parts.push('  var timeLeft = 5;');
 parts.push('  skipBtn.textContent = "Please Wait (" + timeLeft + ")";');
 parts.push('  var timer = setInterval(function(){');
@@ -692,6 +765,9 @@ parts.push('}');
 
   parts.push('function playVideo(){');
   parts.push('  if(!movieData) return;');
+  // ✅ watched হিসেবে mark
+  parts.push('  markWatched(movieData.id);');
+  
   parts.push('  var pb = document.getElementById("pb");');
   parts.push('  pb.style.display = "block";');
   parts.push('  document.getElementById("ctrl").style.display="flex";');
@@ -1022,10 +1098,11 @@ function adminPage() {
   parts.push('  }catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}');
   parts.push('}');
   
+  // ✅ Admin এর জন্য noshuffle=1 (original order এ সব দেখাবে, repeat ছাড়া)
   parts.push('async function loadList(){');
   parts.push('  var p=1,all=[];');
   parts.push('  while(true){');
-  parts.push('    var r=await fetch("/api/movies?page="+p);');
+  parts.push('    var r=await fetch("/api/movies?page="+p+"&noshuffle=1");');
   parts.push('    var d=await r.json();');
   parts.push('    all=all.concat(d.items);');
   parts.push('    if(p>=d.totalPages)break;');
@@ -1059,7 +1136,7 @@ function adminPage() {
   parts.push('async function editMovie(id){');
   parts.push('  var p=1,all=[];');
   parts.push('  while(true){');
-  parts.push('    var r=await fetch("/api/movies?page="+p);');
+  parts.push('    var r=await fetch("/api/movies?page="+p+"&noshuffle=1");');
   parts.push('    var d=await r.json();');
   parts.push('    all=all.concat(d.items);');
   parts.push('    if(p>=d.totalPages)break;');
