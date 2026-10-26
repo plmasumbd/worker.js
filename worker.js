@@ -155,34 +155,55 @@ function hashString(str) {
   }
   return h >>> 0;
 }
-
 // ================= API: LIST MOVIES =================
 async function listMovies(env, url) {
   const page = parseInt(url.searchParams.get("page") || "1");
   const search = (url.searchParams.get("search") || "").toLowerCase().trim();
   const seed = url.searchParams.get("seed") || "";
   const watchedParam = url.searchParams.get("watched") || "";
-  const noShuffle = url.searchParams.get("noshuffle") === "1"; // admin এর জন্য
+  const noShuffle = url.searchParams.get("noshuffle") === "1";
 
   const raw = await env.MOVIES.get("movie_list");
   let list = raw ? JSON.parse(raw) : [];
 
+  const watchedSet = new Set(
+    watchedParam.split(",").map(x => x.trim()).filter(Boolean)
+  );
+
   if (search) {
-    // Search এর সময় watched কে শেষে পাঠাই, কিন্তু shuffle করি না
-    if (watchedParam) {
-      const watchedSet = new Set(watchedParam.split(",").map(x => x.trim()).filter(Boolean));
-      const unwatched = [], watched = [];
-      for (const m of list) {
-        if (watchedSet.has(String(m.id))) watched.push(m);
-        else unwatched.push(m);
-      }
-      list = unwatched.concat(watched);
-    }
-  } else if (noShuffle) {
-    // Admin panel এর জন্য: shuffle করি না, শুধু original order
-    // কিছু করি না
-  } else {
-    // ✅ Deterministic shuffle based on (id + seed)
+    list = list.filter(m => m.title.toLowerCase().includes(search));
+  }
+
+  if (!noShuffle) {
+    // ✅ STEP 1: সব video এর stable hash বের করি
+    // watched হলেও hash একই থাকবে — শুধু "watched priority" যোগ হবে
+    const scored = list.map(m => {
+      const baseHash = hashString(String(m.id) + "|" + seed);
+      const isWatched = watchedSet.has(String(m.id));
+      // watched হলে priority = 1 (শেষে), unwatched হলে 0 (আগে)
+      // 🎯 গুরুত্বপূর্ণ: baseHash সবসময় same থাকে, watched flag শুধু group ঠিক করে
+      return {
+        movie: m,
+        watched: isWatched ? 1 : 0,
+        hash: baseHash
+      };
+    });
+
+    // ✅ STEP 2: প্রথমে watched (0 আগে, 1 পরে), তারপর hash দিয়ে stable sort
+    scored.sort((a, b) => {
+      if (a.watched !== b.watched) return a.watched - b.watched; // unwatched আগে
+      if (a.hash !== b.hash) return a.hash - b.hash;
+      return String(a.movie.id).localeCompare(String(b.movie.id));
+    });
+
+    list = scored.map(x => x.movie);
+  }
+
+  const total = list.length;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const start = (page - 1) * PAGE_SIZE;
+  return json({ items: list.slice(start, start + PAGE_SIZE), page: page, totalPages: pages, total: total });
+}
     // - seed same হলে order same (pagination এ repeat নেই)
     // - seed নতুন হলে (reload এ) order নতুন
     list.sort((a, b) => {
