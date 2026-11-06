@@ -651,6 +651,7 @@ function homePage() {
   return parts.join("\n");
 }
 
+// ================= WATCH PAGE =============
 // ================= WATCH PAGE =================
 function watchPage(id) {
   const parts = [];
@@ -671,14 +672,29 @@ function watchPage(id) {
   parts.push('.player{width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden;position:relative}');
   parts.push('.player iframe,.player video{width:100%;height:100%;border:0;display:block}');
   
-  parts.push('body.fs-mode .player-wrap{position:fixed;inset:0;z-index:99999;background:#000;width:100vw;height:100vh;margin:0;padding:0;}');
-  parts.push('body.fs-mode .player{width:100vw;height:100vh;aspect-ratio:unset;border-radius:0;}');
-  parts.push('body.fs-mode .player iframe,body.fs-mode .player video{width:100vw;height:100vh;}');
+  // Custom fullscreen mode
+  parts.push('body.fs-mode{overflow:hidden;background:#000;}');
+  parts.push('body.fs-mode .player-wrap{position:fixed;inset:0;z-index:99999;background:#000;width:100vw;height:100vh;margin:0;padding:0;display:flex;align-items:center;justify-content:center;}');
+  parts.push('body.fs-mode .player{width:100vw;height:100vh;aspect-ratio:unset;border-radius:0;display:flex;align-items:center;justify-content:center;background:#000;}');
+  parts.push('body.fs-mode .player iframe,body.fs-mode .player video{width:100%;height:100%;object-fit:contain;}');
   parts.push('body.fs-mode header,body.fs-mode .title,body.fs-mode .meta,body.fs-mode .actions,body.fs-mode .ad,body.fs-mode .controls,body.fs-mode .section-title,body.fs-mode .related-grid,body.fs-mode .trending-side,body.fs-mode .continue-wrap{display:none !important;}');
   parts.push('body.fs-mode .wrap{max-width:none;margin:0;padding:0;}');
   
-  parts.push('.fs-exit-btn{display:none;position:fixed;top:12px;right:12px;z-index:100000;background:rgba(255,0,64,.95);color:#fff;border:none;padding:10px 18px;border-radius:8px;font-size:14px;font-weight:bold;cursor:pointer;font-family:inherit;box-shadow:0 2px 10px rgba(0,0,0,.5)}');
-  parts.push('body.fs-mode .fs-exit-btn{display:block}');
+  // Force Rotate Logic (যদি ফোন পোর্ট্রেট মোডে থাকে)
+  parts.push('@media (orientation: portrait) {');
+  parts.push('  body.fs-mode.force-rotate .player-wrap {');
+  parts.push('    width: 100vh !important;');
+  parts.push('    height: 100vw !important;');
+  parts.push('    top: 50% !important;');
+  parts.push('    left: 50% !important;');
+  parts.push('    transform: translate(-50%, -50%) rotate(90deg) !important;');
+  parts.push('  }');
+  parts.push('  body.fs-mode.force-rotate .player { width: 100vh !important; height: 100vw !important; }');
+  parts.push('  body.fs-mode.force-rotate .player iframe, body.fs-mode.force-rotate .player video { width: 100vh !important; height: 100vw !important; }');
+  parts.push('}');
+
+  parts.push('.fs-exit-btn{display:none;position:fixed;top:15px;right:15px;z-index:100000;background:rgba(255,0,64,.95);color:#fff;border:none;padding:8px 16px;border-radius:20px;font-size:14px;font-weight:bold;cursor:pointer;font-family:inherit;box-shadow:0 2px 10px rgba(0,0,0,.5);align-items:center;gap:5px;}');
+  parts.push('body.fs-mode .fs-exit-btn{display:flex;}');
   
   parts.push('.title{margin-top:18px;font-size:22px;font-weight:700;line-height:1.4}');
   parts.push('.meta{margin-top:10px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;color:#aaa;font-size:14px}');
@@ -875,34 +891,48 @@ function watchPage(id) {
   parts.push('}');
   
   parts.push('var isCustomFS = false;');
+  
+  // Force Rotate Check
+  parts.push('function checkOrientation(){');
+  parts.push('  if(!isCustomFS) return;');
+  parts.push('  var isPortrait = window.innerHeight > window.innerWidth;');
+  parts.push('  if(isPortrait){');
+  parts.push('    document.body.classList.add("force-rotate");');
+  parts.push('  } else {');
+  parts.push('    document.body.classList.remove("force-rotate");');
+  parts.push('  }');
+  parts.push('}');
+  
+  parts.push('window.addEventListener("resize", checkOrientation);');
+  parts.push('window.addEventListener("orientationchange", function(){ setTimeout(checkOrientation, 100); });');
+
   parts.push('function enterCustomFullscreen(){');
   parts.push('  document.body.classList.add("fs-mode");');
   parts.push('  isCustomFS = true;');
   parts.push('  history.pushState({fs:true}, "");');
-  parts.push('  tryLockOrientation();');
-  parts.push('  try{ if(document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(function(){}); }catch(e){}');
-  parts.push('}');
-  parts.push('function exitCustomFullscreen(){');
-  parts.push('  document.body.classList.remove("fs-mode");');
-  parts.push('  isCustomFS = false;');
-  parts.push('  try{ if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function(){}); }catch(e){}');
-  parts.push('  try{ if(screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); }catch(e){}');
-  parts.push('}');
-  parts.push('function tryLockOrientation(){');
   parts.push('  try{');
   parts.push('    if(screen.orientation && screen.orientation.lock){');
   parts.push('      screen.orientation.lock("landscape").catch(function(){});');
   parts.push('    }');
   parts.push('  }catch(e){}');
+  parts.push('  checkOrientation();');
   parts.push('}');
+  
+  parts.push('function exitCustomFullscreen(){');
+  parts.push('  document.body.classList.remove("fs-mode");');
+  parts.push('  document.body.classList.remove("force-rotate");');
+  parts.push('  isCustomFS = false;');
+  parts.push('  try{');
+  parts.push('    if(screen.orientation && screen.orientation.unlock){');
+  parts.push('      screen.orientation.unlock();');
+  parts.push('    }');
+  parts.push('  }catch(e){}');
+  parts.push('}');
+  
   parts.push('window.addEventListener("popstate", function(){');
   parts.push('  if(isCustomFS){ exitCustomFullscreen(); }');
   parts.push('});');
-  parts.push('document.addEventListener("fullscreenchange", function(){');
-  parts.push('  if(!document.fullscreenElement && !isCustomFS){');
-  parts.push('    document.body.classList.remove("fs-mode");');
-  parts.push('  }');
-  parts.push('});');
+  
   parts.push('window.addEventListener("keydown", function(e){');
   parts.push('  if(e.key === "Escape" && isCustomFS){');
   parts.push('    exitCustomFullscreen();');
@@ -1199,7 +1229,7 @@ function watchPage(id) {
   parts.push('  }else{');
   parts.push('    var f=document.createElement("iframe");');
   parts.push('    f.src=movieData.videoUrl;');
-  parts.push('    f.allow="autoplay;encrypted-media;picture-in-picture;fullscreen";');
+  parts.push('    f.allow="autoplay; encrypted-media; picture-in-picture; fullscreen";');
   parts.push('    f.allowFullscreen=true;');
   parts.push('    f.referrerPolicy="no-referrer";');
   parts.push('    pb.appendChild(f);');
@@ -1253,7 +1283,6 @@ function watchPage(id) {
   parts.push('</body></html>');
   return parts.join("\n");
 }
-
 // ================= ADMIN PAGE =================
 function adminPage() {
   const parts = [];
