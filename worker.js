@@ -672,14 +672,14 @@ function watchPage(id) {
   parts.push('.player{width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden;position:relative}');
   parts.push('.player iframe,.player video{width:100%;height:100%;border:0;display:block}');
   
-  // Custom fullscreen mode
+  // Custom Fullscreen Mode CSS
   parts.push('body.fs-mode{overflow:hidden;background:#000;}');
   parts.push('body.fs-mode .player-wrap{position:fixed;inset:0;z-index:99999;background:#000;width:100vw;height:100vh;margin:0;padding:0;display:flex;align-items:center;justify-content:center;}');
   parts.push('body.fs-mode .player{width:100vw;height:100vh;aspect-ratio:unset;border-radius:0;display:flex;align-items:center;justify-content:center;background:#000;}');
   parts.push('body.fs-mode .player iframe,body.fs-mode .player video{width:100%;height:100%;object-fit:contain;}');
   parts.push('body.fs-mode header,body.fs-mode .title,body.fs-mode .meta,body.fs-mode .actions,body.fs-mode .ad,body.fs-mode .controls,body.fs-mode .section-title,body.fs-mode .related-grid,body.fs-mode .trending-side,body.fs-mode .continue-wrap{display:none !important;}');
   parts.push('body.fs-mode .wrap{max-width:none;margin:0;padding:0;}');
-  
+
   // Force Rotate Logic (যদি ফোন পোর্ট্রেট মোডে থাকে)
   parts.push('@media (orientation: portrait) {');
   parts.push('  body.fs-mode.force-rotate .player-wrap {');
@@ -690,7 +690,7 @@ function watchPage(id) {
   parts.push('    transform: translate(-50%, -50%) rotate(90deg) !important;');
   parts.push('  }');
   parts.push('  body.fs-mode.force-rotate .player { width: 100vh !important; height: 100vw !important; }');
-  parts.push('  body.fs-mode.force-rotate .player iframe, body.fs-mode.force-rotate .player video { width: 100vh !important; height: 100vw !important; }');
+  parts.push('  body.fs-mode.force-rotate .player iframe, body.fs-mode.force-rotate .player video { width: 100vh !important; height: 100vw !important; object-fit: contain !important; }');
   parts.push('}');
 
   parts.push('.fs-exit-btn{display:none;position:fixed;top:15px;right:15px;z-index:100000;background:rgba(255,0,64,.95);color:#fff;border:none;padding:8px 16px;border-radius:20px;font-size:14px;font-weight:bold;cursor:pointer;font-family:inherit;box-shadow:0 2px 10px rgba(0,0,0,.5);align-items:center;gap:5px;}');
@@ -892,7 +892,7 @@ function watchPage(id) {
   
   parts.push('var isCustomFS = false;');
   
-  // Force Rotate Check
+  // Force Rotate Check Function
   parts.push('function checkOrientation(){');
   parts.push('  if(!isCustomFS) return;');
   parts.push('  var isPortrait = window.innerHeight > window.innerWidth;');
