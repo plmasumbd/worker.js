@@ -653,7 +653,6 @@ return parts.join("\n");
 
 // ================= WATCH PAGE =================
 
-
 // ================= WATCH PAGE =================
 function watchPage(id) {
   const parts = [];
@@ -672,6 +671,18 @@ function watchPage(id) {
   parts.push('.wrap{max-width:1200px;margin:24px auto;padding:0 20px}');
   parts.push('.player-wrap{position:relative;width:100%; aspect-ratio:16/9; background:#000; border-radius:10px; overflow:hidden; display:flex; align-items:center; justify-content:center;}');
   parts.push('.player iframe, .player video{width:100%;height:100%;border:0;display:block; object-fit:contain;}');
+  
+  // Fullscreen CSS
+  parts.push('body.fs-mode{overflow:hidden;background:#000;}');
+  parts.push('body.fs-mode .player-wrap{position:fixed;inset:0;z-index:99999;background:#000;width:100vw;height:100vh;margin:0;padding:0;border-radius:0;display:flex;align-items:center;justify-content:center;}');
+  parts.push('body.fs-mode .player{width:100vw;height:100vh;}');
+  parts.push('body.fs-mode .player iframe, body.fs-mode .player video{width:100%;height:100%;object-fit:contain;}');
+  parts.push('body.fs-mode header,body.fs-mode .title,body.fs-mode .meta,body.fs-mode .actions,body.fs-mode .ad,body.fs-mode .controls,body.fs-mode .section-title,body.fs-mode .related-grid,body.fs-mode .trending-side,body.fs-mode .continue-wrap{display:none !important;}');
+  parts.push('body.fs-mode .wrap{max-width:none;margin:0;padding:0;}');
+  
+  // Exit Fullscreen Button
+  parts.push('.fs-exit-btn{display:none;position:fixed;top:15px;right:15px;z-index:100000;background:rgba(255,0,64,.95);color:#fff;border:none;padding:8px 16px;border-radius:20px;font-size:14px;font-weight:bold;cursor:pointer;font-family:inherit;box-shadow:0 2px 10px rgba(0,0,0,.5);align-items:center;gap:5px;}');
+  parts.push('body.fs-mode .fs-exit-btn{display:flex;}');
   
   parts.push('.title{margin-top:18px;font-size:22px;font-weight:700;line-height:1.4}');
   parts.push('.meta{margin-top:10px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;color:#aaa;font-size:14px}');
@@ -819,7 +830,8 @@ function watchPage(id) {
   parts.push('  </div>');
   parts.push('</div>');
 
-  // Removed Custom Exit Fullscreen button to avoid confusion
+  // কাস্টম Fullscreen থেকে বের হওয়ার বাটন
+  parts.push('<button id="fsExitBtn" class="fs-exit-btn" onclick="exitFullscreen()">✖ Exit Fullscreen</button>');
 
   parts.push('<header><a href="/" class="logo">AdultMovie</a><a href="/" class="back-btn">← Home</a></header>');
   parts.push('<div class="wrap">');
@@ -832,9 +844,8 @@ function watchPage(id) {
   parts.push('  </div>');
   parts.push('</div>');
   
-  // We keep our button but it now triggers Native Fullscreen (which might rotate automatically)
   parts.push('<div class="controls" id="ctrl" style="display:none;">');
-  parts.push('  <button class="fs-btn" onclick="enterNativeFullscreen()">⛶ Full Screen</button>');
+  parts.push('  <button class="fs-btn" onclick="enterFullscreen()">⛶ Full Screen</button>');
   parts.push('</div>');
   parts.push('<div class="title" id="t">Loading...</div>');
   parts.push('<div class="meta" id="metaBar"></div>');
@@ -869,21 +880,39 @@ function watchPage(id) {
   parts.push('  sc.forEach(function(s){c.appendChild(s);});');
   parts.push('}');
   
-  // Just try to request native fullscreen on the iframe's container
-  parts.push('function enterNativeFullscreen(){');
-  parts.push('  var elem = $("pb");');
+  // Fullscreen Logic
+  parts.push('function enterFullscreen(){');
+  parts.push('  document.body.classList.add("fs-mode");');
+  parts.push('  var elem = $("playerWrap");');
   parts.push('  if (elem.requestFullscreen) {');
-  parts.push('    elem.requestFullscreen().then(function(){');
-  parts.push('      if(screen.orientation && screen.orientation.lock){');
-  parts.push('        screen.orientation.lock("landscape").catch(function(){});');
-  parts.push('      }');
-  parts.push('    }).catch(function(e){});');
+  parts.push('    elem.requestFullscreen().catch(function(){});');
   parts.push('  } else if (elem.webkitRequestFullscreen) {');
   parts.push('    elem.webkitRequestFullscreen();');
-  parts.push('  } else if (elem.msRequestFullscreen) {');
-  parts.push('    elem.msRequestFullscreen();');
   parts.push('  }');
+  parts.push('  try{ if(screen.orientation && screen.orientation.lock) screen.orientation.lock("landscape").catch(function(){}); }catch(e){}');
   parts.push('}');
+  
+  parts.push('function exitFullscreen(){');
+  parts.push('  document.body.classList.remove("fs-mode");');
+  parts.push('  try{ if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function(){}); }catch(e){}');
+  parts.push('  try{ if(document.webkitFullscreenElement && document.webkitExitFullscreen) document.webkitExitFullscreen(); }catch(e){}');
+  parts.push('  try{ if(screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); }catch(e){}');
+  parts.push('}');
+  
+  // Esc key or Native Fullscreen exit handler
+  parts.push('document.addEventListener("fullscreenchange", function(){');
+  parts.push('  if(!document.fullscreenElement) {');
+  parts.push('    document.body.classList.remove("fs-mode");');
+  parts.push('  }');
+  parts.push('});');
+  parts.push('document.addEventListener("webkitfullscreenchange", function(){');
+  parts.push('  if(!document.webkitFullscreenElement) {');
+  parts.push('    document.body.classList.remove("fs-mode");');
+  parts.push('  }');
+  parts.push('});');
+  parts.push('window.addEventListener("keydown", function(e){');
+  parts.push('  if(e.key === "Escape"){ exitFullscreen(); }');
+  parts.push('});');
   
   parts.push('function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",\'"\':"&quot;"}[c];});}');
   
@@ -1179,6 +1208,16 @@ function watchPage(id) {
   parts.push('    f.setAttribute("webkitallowfullscreen", "true");');
   parts.push('    f.setAttribute("mozallowfullscreen", "true");');
   parts.push('    f.referrerPolicy="no-referrer";');
+  parts.push('    f.onload = function(){');
+  // Detect if iframe goes fullscreen itself (some players do this on button click)
+  parts.push('      try{');
+  parts.push('        var iframeDoc = f.contentDocument || f.contentWindow.document;');
+  parts.push('        iframeDoc.addEventListener("fullscreenchange", function(){');
+  parts.push('          if(iframeDoc.fullscreenElement){ document.body.classList.add("fs-mode"); }');
+  parts.push('          else { document.body.classList.remove("fs-mode"); }');
+  parts.push('        });');
+  parts.push('      }catch(e){}'); // Cross-origin errors expected
+  parts.push('    };');
   parts.push('    pb.appendChild(f);');
   parts.push('  }');
   parts.push('  trackView();');
@@ -1230,6 +1269,7 @@ function watchPage(id) {
   parts.push('</body></html>');
   return parts.join("\n");
 }
+
 // ================= ADMIN PAGE =================
 function adminPage() {
 const parts = [];
