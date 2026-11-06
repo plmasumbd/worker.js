@@ -25,6 +25,7 @@ export default {
     if (p === "/api/movies/related" && request.method === "GET") return getRelatedMovies(env, url);
     if (p === "/api/movies/trending" && request.method === "GET") return getTrendingMovies(env);
     if (p === "/api/movies/track-view" && request.method === "POST") return trackView(request, env);
+    if (p === "/api/check-link" && request.method === "GET") return checkLink(url);
 
     if (p === "/") return html(homePage());
     if (p === "/admin") return html(adminPage());
@@ -33,6 +34,32 @@ export default {
     return new Response("404", { status: 404 });
   }
 };
+
+// ================= CHECK LINK =================
+async function checkLink(url) {
+  const targetUrl = url.searchParams.get("url");
+  if (!targetUrl) return json({ ok: false, error: "URL required" }, 400);
+  
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    
+    const res = await fetch(targetUrl, {
+      method: "GET",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Range": "bytes=0-2048"
+      },
+      signal: controller.signal,
+      redirect: "follow"
+    });
+    
+    clearTimeout(timeoutId);
+    return json({ ok: res.ok, status: res.status });
+  } catch (e) {
+    return json({ ok: false, error: e.message }, 500);
+  }
+}
 
 // ================= RELATED MOVIES =================
 async function getRelatedMovies(env, url) {
@@ -630,7 +657,7 @@ function watchPage(id) {
   parts.push('<!DOCTYPE html>');
   parts.push('<html lang="en"><head>');
   parts.push('<meta charset="UTF-8">');
-  parts.push('<meta name="viewport" content="width=device-width,initial-scale=1">');
+  parts.push('<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">');
   parts.push('<title>Watch - AdultMovie</title>');
   parts.push('<style>');
   parts.push('*{margin:0;padding:0;box-sizing:border-box}');
@@ -640,8 +667,19 @@ function watchPage(id) {
   parts.push('header a.logo{color:#ff0040;font-size:22px;font-weight:bold;text-decoration:none;}');
   parts.push('header a.back-btn{color:#eee;text-decoration:none;padding:8px 14px;background:#ff0040;border-radius:6px;font-size:14px}');
   parts.push('.wrap{max-width:1200px;margin:24px auto;padding:0 20px}');
+  parts.push('.player-wrap{position:relative}');
   parts.push('.player{width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden;position:relative}');
   parts.push('.player iframe,.player video{width:100%;height:100%;border:0;display:block}');
+  
+  parts.push('body.fs-mode .player-wrap{position:fixed;inset:0;z-index:99999;background:#000;width:100vw;height:100vh;margin:0;padding:0;}');
+  parts.push('body.fs-mode .player{width:100vw;height:100vh;aspect-ratio:unset;border-radius:0;}');
+  parts.push('body.fs-mode .player iframe,body.fs-mode .player video{width:100vw;height:100vh;}');
+  parts.push('body.fs-mode header,body.fs-mode .title,body.fs-mode .meta,body.fs-mode .actions,body.fs-mode .ad,body.fs-mode .controls,body.fs-mode .section-title,body.fs-mode .related-grid,body.fs-mode .trending-side,body.fs-mode .continue-wrap{display:none !important;}');
+  parts.push('body.fs-mode .wrap{max-width:none;margin:0;padding:0;}');
+  
+  parts.push('.fs-exit-btn{display:none;position:fixed;top:12px;right:12px;z-index:100000;background:rgba(255,0,64,.95);color:#fff;border:none;padding:10px 18px;border-radius:8px;font-size:14px;font-weight:bold;cursor:pointer;font-family:inherit;box-shadow:0 2px 10px rgba(0,0,0,.5)}');
+  parts.push('body.fs-mode .fs-exit-btn{display:block}');
+  
   parts.push('.title{margin-top:18px;font-size:22px;font-weight:700;line-height:1.4}');
   parts.push('.meta{margin-top:10px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;color:#aaa;font-size:14px}');
   parts.push('.meta .views{display:flex;align-items:center;gap:6px;color:#ff9800;font-weight:600}');
@@ -655,8 +693,8 @@ function watchPage(id) {
   parts.push('.nav-btn:hover:not(:disabled){background:#ff0040;border-color:#ff0040}');
   parts.push('.nav-btn:disabled{opacity:.3;cursor:not-allowed}');
   parts.push('.ad{margin:20px 0;text-align:center;overflow:hidden}');
-  parts.push('.controls{display:flex;justify-content:flex-end;margin-top:10px}');
-  parts.push('.fs-btn{background:#ff0040;color:#fff;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:bold;display:flex;align-items:center;gap:8px}');
+  parts.push('.controls{display:flex;justify-content:flex-end;margin-top:10px;gap:8px}');
+  parts.push('.fs-btn{background:#ff0040;color:#fff;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:bold;display:flex;align-items:center;gap:8px;font-family:inherit}');
   parts.push('.fs-btn:hover{background:#e60039}');
   parts.push('.section-title{margin:32px 0 16px;font-size:19px;font-weight:700;color:#fff;display:flex;align-items:center;gap:10px}');
   parts.push('.section-title:before{content:"";width:4px;height:22px;background:#ff0040;border-radius:2px}');
@@ -726,6 +764,12 @@ function watchPage(id) {
   parts.push('.an-cancel{background:#333;color:#fff}');
   parts.push('.an-cancel:hover{background:#444}');
   
+  parts.push('.video-error{display:none;position:absolute;inset:0;background:rgba(0,0,0,.9);z-index:5;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:20px;}');
+  parts.push('.video-error.show{display:flex}');
+  parts.push('.video-error h3{color:#ff0040;font-size:18px;margin-bottom:10px}');
+  parts.push('.video-error p{color:#ccc;font-size:14px;margin-bottom:16px;max-width:400px}');
+  parts.push('.video-error button{background:#ff0040;color:#fff;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-weight:bold;font-family:inherit;font-size:14px}');
+  
   parts.push('@media(max-width:768px){');
   parts.push('.title{font-size:17px}');
   parts.push('.related-grid{grid-template-columns:repeat(2,1fr)}');
@@ -782,10 +826,21 @@ function watchPage(id) {
   parts.push('  </div>');
   parts.push('</div>');
 
+  parts.push('<button class="fs-exit-btn" onclick="exitCustomFullscreen()">✖ Exit Fullscreen</button>');
+
   parts.push('<header><a href="/" class="logo">AdultMovie</a><a href="/" class="back-btn">← Home</a></header>');
   parts.push('<div class="wrap">');
-  parts.push('<div class="player" id="pb" style="display:none;"></div>');
-  parts.push('<div class="controls" id="ctrl" style="display:none;"><button class="fs-btn" onclick="openFullscreen()">⛶ Full Screen</button></div>');
+  parts.push('<div class="player-wrap" id="playerWrap">');
+  parts.push('  <div class="player" id="pb" style="display:none;"></div>');
+  parts.push('  <div class="video-error" id="videoError">');
+  parts.push('    <h3>⚠️ Video Not Loading</h3>');
+  parts.push('    <p>This video might be temporarily unavailable or blocked. Try another one.</p>');
+  parts.push('    <button onclick="location.reload()">🔄 Reload Page</button>');
+  parts.push('  </div>');
+  parts.push('</div>');
+  parts.push('<div class="controls" id="ctrl" style="display:none;">');
+  parts.push('  <button class="fs-btn" onclick="enterCustomFullscreen()">⛶ Full Screen</button>');
+  parts.push('</div>');
   parts.push('<div class="title" id="t">Loading...</div>');
   parts.push('<div class="meta" id="metaBar"></div>');
   parts.push('<div class="actions" id="actBar"></div>');
@@ -819,7 +874,41 @@ function watchPage(id) {
   parts.push('  sc.forEach(function(s){c.appendChild(s);});');
   parts.push('}');
   
-  parts.push('function openFullscreen(){var e=$("pb");if(e.requestFullscreen)e.requestFullscreen();else if(e.webkitRequestFullscreen)e.webkitRequestFullscreen();}');
+  parts.push('var isCustomFS = false;');
+  parts.push('function enterCustomFullscreen(){');
+  parts.push('  document.body.classList.add("fs-mode");');
+  parts.push('  isCustomFS = true;');
+  parts.push('  history.pushState({fs:true}, "");');
+  parts.push('  tryLockOrientation();');
+  parts.push('  try{ if(document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(function(){}); }catch(e){}');
+  parts.push('}');
+  parts.push('function exitCustomFullscreen(){');
+  parts.push('  document.body.classList.remove("fs-mode");');
+  parts.push('  isCustomFS = false;');
+  parts.push('  try{ if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function(){}); }catch(e){}');
+  parts.push('  try{ if(screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); }catch(e){}');
+  parts.push('}');
+  parts.push('function tryLockOrientation(){');
+  parts.push('  try{');
+  parts.push('    if(screen.orientation && screen.orientation.lock){');
+  parts.push('      screen.orientation.lock("landscape").catch(function(){});');
+  parts.push('    }');
+  parts.push('  }catch(e){}');
+  parts.push('}');
+  parts.push('window.addEventListener("popstate", function(){');
+  parts.push('  if(isCustomFS){ exitCustomFullscreen(); }');
+  parts.push('});');
+  parts.push('document.addEventListener("fullscreenchange", function(){');
+  parts.push('  if(!document.fullscreenElement && !isCustomFS){');
+  parts.push('    document.body.classList.remove("fs-mode");');
+  parts.push('  }');
+  parts.push('});');
+  parts.push('window.addEventListener("keydown", function(e){');
+  parts.push('  if(e.key === "Escape" && isCustomFS){');
+  parts.push('    exitCustomFullscreen();');
+  parts.push('    history.back();');
+  parts.push('  }');
+  parts.push('});');
   
   parts.push('function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",\'"\':"&quot;"}[c];});}');
   
@@ -1097,11 +1186,15 @@ function watchPage(id) {
   parts.push('  pb.style.display = "block";');
   parts.push('  $("ctrl").style.display="flex";');
   parts.push('  pb.innerHTML = "";');
+  parts.push('  $("videoError").classList.remove("show");');
+  
   parts.push('  var direct=/\\.(mp4|webm|ogg|m3u8)(\\?|$)/i.test(movieData.videoUrl);');
   parts.push('  if(direct){');
   parts.push('    var v=document.createElement("video");');
   parts.push('    v.src=movieData.videoUrl;v.controls=true;v.autoplay=true;v.playsInline=true;');
   parts.push('    v.onended = function(){ onVideoEnded(); };');
+  parts.push('    v.onerror = function(){ showVideoError(); };');
+  parts.push('    v.onloadeddata = function(){ $("videoError").classList.remove("show"); };');
   parts.push('    pb.appendChild(v);');
   parts.push('  }else{');
   parts.push('    var f=document.createElement("iframe");');
@@ -1120,6 +1213,10 @@ function watchPage(id) {
   parts.push('      });');
   parts.push('    }catch(e){}');
   parts.push('  }');
+  parts.push('}');
+  
+  parts.push('function showVideoError(){');
+  parts.push('  $("videoError").classList.add("show");');
   parts.push('}');
   
   parts.push('function onVideoEnded(){');
@@ -1456,6 +1553,60 @@ function adminPage() {
   parts.push('  return n.toString();');
   parts.push('}');
   
+  // ===== LINK STATUS TRACKING =====
+  parts.push('function getLinkStatus(){');
+  parts.push('  try{return JSON.parse(localStorage.getItem("link_status")||"{}");}catch(e){return {};}');
+  parts.push('}');
+  parts.push('function setLinkStatus(id, status){');
+  parts.push('  var s=getLinkStatus();s[id]=status;');
+  parts.push('  localStorage.setItem("link_status",JSON.stringify(s));');
+  parts.push('}');
+  parts.push('function getStatusBadge(id){');
+  parts.push('  var s=getLinkStatus();');
+  parts.push('  var st=s[id];');
+  parts.push('  if(st==="ok") return \'<span style="background:#00c853;color:#000;font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px">✓ OK</span>\';');
+  parts.push('  if(st==="fail") return \'<span style="background:#c00;color:#fff;font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px">✗ FAIL</span>\';');
+  parts.push('  return \'\';');
+  parts.push('}');
+  
+  parts.push('async function testLink(m, itemEl){');
+  parts.push('  var h4 = itemEl.querySelector("h4");');
+  parts.push('  if(!h4)return;');
+  parts.push('  var oldSpans = h4.querySelectorAll("span");');
+  parts.push('  oldSpans.forEach(function(s){s.remove();});');
+  parts.push('  h4.insertAdjacentHTML("beforeend", \'<span style="background:#ff9800;color:#000;font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px">⏳</span>\');');
+  parts.push('  var ok = false;');
+  parts.push('  try{');
+  parts.push('    var r = await fetch("/api/check-link?url="+encodeURIComponent(m.videoUrl));');
+  parts.push('    var d = await r.json();');
+  parts.push('    ok = d.ok === true;');
+  parts.push('  }catch(e){ok = false;}');
+  parts.push('  setLinkStatus(m.id, ok?"ok":"fail");');
+  parts.push('  var oldSpans2 = h4.querySelectorAll("span");');
+  parts.push('  oldSpans2.forEach(function(s){s.remove();});');
+  parts.push('  h4.insertAdjacentHTML("beforeend", getStatusBadge(m.id));');
+  parts.push('}');
+  
+  parts.push('async function checkAllLinks(all, btn){');
+  parts.push('  btn.disabled = true;');
+  parts.push('  var okCount = 0, failCount = 0;');
+  parts.push('  for(var i=0; i<all.length; i++){');
+  parts.push('    var m = all[i];');
+  parts.push('    btn.textContent = "⏳ " + (i+1) + "/" + all.length;');
+  parts.push('    var ok = false;');
+  parts.push('    try{');
+  parts.push('      var r = await fetch("/api/check-link?url="+encodeURIComponent(m.videoUrl));');
+  parts.push('      var d = await r.json();');
+  parts.push('      ok = d.ok === true;');
+  parts.push('    }catch(e){ok = false;}');
+  parts.push('    setLinkStatus(m.id, ok?"ok":"fail");');
+  parts.push('    if(ok) okCount++; else failCount++;');
+  parts.push('  }');
+  parts.push('  btn.disabled = false;');
+  parts.push('  btn.textContent = "🔍 Check All (✓" + okCount + " ✗" + failCount + ")";');
+  parts.push('  loadList();');
+  parts.push('}');
+  
   parts.push('async function loadList(){');
   parts.push('  var p=1,all=[];');
   parts.push('  while(true){');
@@ -1468,21 +1619,44 @@ function adminPage() {
   parts.push('  var el=$("list");');
   parts.push('  if(!all.length){el.innerHTML=\'<p style="color:#666">No movies</p>\';return}');
   parts.push('  el.innerHTML="";');
+  
+  parts.push('  var hdr=document.createElement("div");');
+  parts.push('  hdr.style.cssText="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px";');
+  parts.push('  hdr.innerHTML=\'<div style="font-size:14px;color:#888">Total: \'+all.length+\' videos</div>\';');
+  parts.push('  var chkBtn=document.createElement("button");');
+  parts.push('  chkBtn.className="primary small";');
+  parts.push('  chkBtn.style.background="#2196F3";');
+  parts.push('  chkBtn.style.marginTop="0";');
+  parts.push('  chkBtn.textContent="🔍 Check All Links";');
+  parts.push('  chkBtn.onclick=function(){ checkAllLinks(all, chkBtn); };');
+  parts.push('  hdr.appendChild(chkBtn);');
+  parts.push('  el.appendChild(hdr);');
+  
   parts.push('  all.forEach(function(m){');
   parts.push('    var s=m.thumbnail?("background-image:url(\'" + m.thumbnail + "\')"):"";');
   parts.push('    var d=document.createElement("div");');
   parts.push('    d.className="item";');
-  parts.push('    d.innerHTML=\'<div class="info"><div class="mini" style="\'+s+\'"></div><div><h4>\'+esc(m.title)+\'</h4><div class="stats">👁 \'+fmtViews(m.views||0)+\' views</div></div></div>\';');
+  parts.push('    var statusBadge = getStatusBadge(m.id);');
+  parts.push('    d.innerHTML=\'<div class="info"><div class="mini" style="\'+s+\'"></div><div><h4>\'+esc(m.title)+\' \'+statusBadge+\'</h4><div class="stats">👁 \'+fmtViews(m.views||0)+\' views</div></div></div>\';');
   parts.push('    var acts=document.createElement("div");');
   parts.push('    acts.className="acts";');
+  parts.push('    var chk=document.createElement("button");');
+  parts.push('    chk.className="primary small";');
+  parts.push('    chk.style.background="#2196F3";');
+  parts.push('    chk.style.marginTop="0";');
+  parts.push('    chk.textContent="Test";');
+  parts.push('    chk.onclick=function(){ testLink(m, d); };');
   parts.push('    var eb=document.createElement("button");');
   parts.push('    eb.className="primary small";');
+  parts.push('    eb.style.marginTop="0";');
   parts.push('    eb.textContent="Edit";');
   parts.push('    eb.onclick=function(){editMovie(m.id)};');
   parts.push('    var db=document.createElement("button");');
   parts.push('    db.className="primary small danger";');
+  parts.push('    db.style.marginTop="0";');
   parts.push('    db.textContent="Delete";');
   parts.push('    db.onclick=function(){delMovie(m.id)};');
+  parts.push('    acts.appendChild(chk);');
   parts.push('    acts.appendChild(eb);');
   parts.push('    acts.appendChild(db);');
   parts.push('    d.appendChild(acts);');
