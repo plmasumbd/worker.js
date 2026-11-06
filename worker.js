@@ -830,7 +830,7 @@ function watchPage(id) {
   parts.push('  </div>');
   parts.push('</div>');
 
-  // কাস্টম Fullscreen থেকে বের হওয়ার বাটন
+  // Fullscreen Exit Button
   parts.push('<button id="fsExitBtn" class="fs-exit-btn" onclick="exitFullscreen()">✖ Exit Fullscreen</button>');
 
   parts.push('<header><a href="/" class="logo">AdultMovie</a><a href="/" class="back-btn">← Home</a></header>');
@@ -880,36 +880,18 @@ function watchPage(id) {
   parts.push('  sc.forEach(function(s){c.appendChild(s);});');
   parts.push('}');
   
-  // Fullscreen Logic
+  // Fullscreen Logic (Custom Fixed)
   parts.push('function enterFullscreen(){');
   parts.push('  document.body.classList.add("fs-mode");');
-  parts.push('  var elem = $("playerWrap");');
-  parts.push('  if (elem.requestFullscreen) {');
-  parts.push('    elem.requestFullscreen().catch(function(){});');
-  parts.push('  } else if (elem.webkitRequestFullscreen) {');
-  parts.push('    elem.webkitRequestFullscreen();');
-  parts.push('  }');
   parts.push('  try{ if(screen.orientation && screen.orientation.lock) screen.orientation.lock("landscape").catch(function(){}); }catch(e){}');
   parts.push('}');
   
   parts.push('function exitFullscreen(){');
   parts.push('  document.body.classList.remove("fs-mode");');
-  parts.push('  try{ if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function(){}); }catch(e){}');
-  parts.push('  try{ if(document.webkitFullscreenElement && document.webkitExitFullscreen) document.webkitExitFullscreen(); }catch(e){}');
   parts.push('  try{ if(screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); }catch(e){}');
   parts.push('}');
   
-  // Esc key or Native Fullscreen exit handler
-  parts.push('document.addEventListener("fullscreenchange", function(){');
-  parts.push('  if(!document.fullscreenElement) {');
-  parts.push('    document.body.classList.remove("fs-mode");');
-  parts.push('  }');
-  parts.push('});');
-  parts.push('document.addEventListener("webkitfullscreenchange", function(){');
-  parts.push('  if(!document.webkitFullscreenElement) {');
-  parts.push('    document.body.classList.remove("fs-mode");');
-  parts.push('  }');
-  parts.push('});');
+  // Esc key handler
   parts.push('window.addEventListener("keydown", function(e){');
   parts.push('  if(e.key === "Escape"){ exitFullscreen(); }');
   parts.push('});');
@@ -1208,16 +1190,6 @@ function watchPage(id) {
   parts.push('    f.setAttribute("webkitallowfullscreen", "true");');
   parts.push('    f.setAttribute("mozallowfullscreen", "true");');
   parts.push('    f.referrerPolicy="no-referrer";');
-  parts.push('    f.onload = function(){');
-  // Detect if iframe goes fullscreen itself (some players do this on button click)
-  parts.push('      try{');
-  parts.push('        var iframeDoc = f.contentDocument || f.contentWindow.document;');
-  parts.push('        iframeDoc.addEventListener("fullscreenchange", function(){');
-  parts.push('          if(iframeDoc.fullscreenElement){ document.body.classList.add("fs-mode"); }');
-  parts.push('          else { document.body.classList.remove("fs-mode"); }');
-  parts.push('        });');
-  parts.push('      }catch(e){}'); // Cross-origin errors expected
-  parts.push('    };');
   parts.push('    pb.appendChild(f);');
   parts.push('  }');
   parts.push('  trackView();');
