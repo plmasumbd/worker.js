@@ -668,35 +668,8 @@ function watchPage(id) {
   parts.push('header a.logo{color:#ff0040;font-size:22px;font-weight:bold;text-decoration:none;}');
   parts.push('header a.back-btn{color:#eee;text-decoration:none;padding:8px 14px;background:#ff0040;border-radius:6px;font-size:14px}');
   parts.push('.wrap{max-width:1200px;margin:24px auto;padding:0 20px}');
-  parts.push('.player-wrap{position:relative}');
-  parts.push('.player{width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden;position:relative}');
-  parts.push('.player iframe,.player video{width:100%;height:100%;border:0;display:block}');
-  
-  // Custom Fullscreen Mode CSS
-  parts.push('body.fs-mode{overflow:hidden;background:#000;}');
-  parts.push('body.fs-mode .player-wrap{position:fixed;inset:0;z-index:99999;background:#000;width:100vw;height:100vh;margin:0;padding:0;display:flex;align-items:center;justify-content:center;}');
-  parts.push('body.fs-mode .player{width:100vw;height:100vh;aspect-ratio:unset;border-radius:0;display:flex;align-items:center;justify-content:center;background:#000;}');
-  parts.push('body.fs-mode .player iframe,body.fs-mode .player video{width:100%;height:100%;object-fit:contain;}');
-  parts.push('body.fs-mode header,body.fs-mode .title,body.fs-mode .meta,body.fs-mode .actions,body.fs-mode .ad,body.fs-mode .controls,body.fs-mode .section-title,body.fs-mode .related-grid,body.fs-mode .trending-side,body.fs-mode .continue-wrap{display:none !important;}');
-  parts.push('body.fs-mode .wrap{max-width:none;margin:0;padding:0;}');
-
-  // 100% Perfect Force Rotate Logic (যদি ফোন পোর্ট্রেট মোডে থাকে)
-  parts.push('@media (orientation: portrait) {');
-  parts.push('  body.fs-mode.force-rotate .player-wrap {');
-  parts.push('    width: 100vh !important;'); /* Height becomes Width */
-  parts.push('    height: 100vw !important;'); /* Width becomes Height */
-  parts.push('    position: absolute !important;');
-  parts.push('    top: 50% !important;');
-  parts.push('    left: 50% !important;');
-  parts.push('    transform: translate(-50%, -50%) rotate(90deg) !important;');
-  parts.push('  }');
-  parts.push('  body.fs-mode.force-rotate .player { width: 100vh !important; height: 100vw !important; }');
-  parts.push('  body.fs-mode.force-rotate .player iframe, body.fs-mode.force-rotate .player video { width: 100vh !important; height: 100vw !important; object-fit: contain !important; }');
-  parts.push('  body.fs-mode.force-rotate .fs-exit-btn { transform: rotate(-90deg) !important; top: 15px !important; right: auto !important; left: 15px !important; }');
-  parts.push('}');
-
-  parts.push('.fs-exit-btn{display:none;position:fixed;top:15px;right:15px;z-index:100000;background:rgba(255,0,64,.95);color:#fff;border:none;padding:8px 16px;border-radius:20px;font-size:14px;font-weight:bold;cursor:pointer;font-family:inherit;box-shadow:0 2px 10px rgba(0,0,0,.5);align-items:center;gap:5px;}');
-  parts.push('body.fs-mode .fs-exit-btn{display:flex;}');
+  parts.push('.player-wrap{position:relative;width:100%; aspect-ratio:16/9; background:#000; border-radius:10px; overflow:hidden; display:flex; align-items:center; justify-content:center;}');
+  parts.push('.player iframe, .player video{width:100%;height:100%;border:0;display:block; object-fit:contain;}');
   
   parts.push('.title{margin-top:18px;font-size:22px;font-weight:700;line-height:1.4}');
   parts.push('.meta{margin-top:10px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;color:#aaa;font-size:14px}');
@@ -844,7 +817,7 @@ function watchPage(id) {
   parts.push('  </div>');
   parts.push('</div>');
 
-  parts.push('<button class="fs-exit-btn" onclick="exitCustomFullscreen()">✖ Exit Fullscreen</button>');
+  // Removed Custom Exit Fullscreen button to avoid confusion
 
   parts.push('<header><a href="/" class="logo">AdultMovie</a><a href="/" class="back-btn">← Home</a></header>');
   parts.push('<div class="wrap">');
@@ -856,8 +829,10 @@ function watchPage(id) {
   parts.push('    <button onclick="location.reload()">🔄 Reload Page</button>');
   parts.push('  </div>');
   parts.push('</div>');
+  
+  // We keep our button but it now triggers Native Fullscreen (which might rotate automatically)
   parts.push('<div class="controls" id="ctrl" style="display:none;">');
-  parts.push('  <button class="fs-btn" onclick="enterCustomFullscreen()">⛶ Full Screen</button>');
+  parts.push('  <button class="fs-btn" onclick="enterNativeFullscreen()">⛶ Full Screen</button>');
   parts.push('</div>');
   parts.push('<div class="title" id="t">Loading...</div>');
   parts.push('<div class="meta" id="metaBar"></div>');
@@ -892,55 +867,21 @@ function watchPage(id) {
   parts.push('  sc.forEach(function(s){c.appendChild(s);});');
   parts.push('}');
   
-  parts.push('var isCustomFS = false;');
-  
-  // Force Rotate Check Function
-  parts.push('function checkOrientation(){');
-  parts.push('  if(!isCustomFS) return;');
-  parts.push('  var isPortrait = window.innerHeight > window.innerWidth;');
-  parts.push('  if(isPortrait){');
-  parts.push('    document.body.classList.add("force-rotate");');
-  parts.push('  } else {');
-  parts.push('    document.body.classList.remove("force-rotate");');
+  // Just try to request native fullscreen on the iframe's container
+  parts.push('function enterNativeFullscreen(){');
+  parts.push('  var elem = $("pb");');
+  parts.push('  if (elem.requestFullscreen) {');
+  parts.push('    elem.requestFullscreen().then(function(){');
+  parts.push('      if(screen.orientation && screen.orientation.lock){');
+  parts.push('        screen.orientation.lock("landscape").catch(function(){});');
+  parts.push('      }');
+  parts.push('    }).catch(function(e){});');
+  parts.push('  } else if (elem.webkitRequestFullscreen) {');
+  parts.push('    elem.webkitRequestFullscreen();');
+  parts.push('  } else if (elem.msRequestFullscreen) {');
+  parts.push('    elem.msRequestFullscreen();');
   parts.push('  }');
   parts.push('}');
-  
-  parts.push('window.addEventListener("resize", checkOrientation);');
-  parts.push('window.addEventListener("orientationchange", function(){ setTimeout(checkOrientation, 100); });');
-
-  parts.push('function enterCustomFullscreen(){');
-  parts.push('  document.body.classList.add("fs-mode");');
-  parts.push('  isCustomFS = true;');
-  parts.push('  history.pushState({fs:true}, "");');
-  parts.push('  try{');
-  parts.push('    if(screen.orientation && screen.orientation.lock){');
-  parts.push('      screen.orientation.lock("landscape").catch(function(){});');
-  parts.push('    }');
-  parts.push('  }catch(e){}');
-  parts.push('  checkOrientation();');
-  parts.push('}');
-  
-  parts.push('function exitCustomFullscreen(){');
-  parts.push('  document.body.classList.remove("fs-mode");');
-  parts.push('  document.body.classList.remove("force-rotate");');
-  parts.push('  isCustomFS = false;');
-  parts.push('  try{');
-  parts.push('    if(screen.orientation && screen.orientation.unlock){');
-  parts.push('      screen.orientation.unlock();');
-  parts.push('    }');
-  parts.push('  }catch(e){}');
-  parts.push('}');
-  
-  parts.push('window.addEventListener("popstate", function(){');
-  parts.push('  if(isCustomFS){ exitCustomFullscreen(); }');
-  parts.push('});');
-  
-  parts.push('window.addEventListener("keydown", function(e){');
-  parts.push('  if(e.key === "Escape" && isCustomFS){');
-  parts.push('    exitCustomFullscreen();');
-  parts.push('    history.back();');
-  parts.push('  }');
-  parts.push('});');
   
   parts.push('function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",\'"\':"&quot;"}[c];});}');
   
@@ -1047,246 +988,7 @@ function watchPage(id) {
   parts.push('  html += \'<button class="act-btn" onclick="openShare()">🔗 Share</button>\';');
   parts.push('  html += \'<div class="nav-btns">\';');
   parts.push('  html += \'<button class="nav-btn" id="prevBtn" onclick="goPrev()" disabled>← Prev</button>\';');
-  parts.push('  html += \'<button class="nav-btn" id="nextBtn" onclick="goNext()" disabled>Next →</button>\';');
-  parts.push('  html += \'</div>\';');
-  parts.push('  $("actBar").innerHTML = html;');
-  parts.push('}');
-  
-  parts.push('function toggleFavClick(){');
-  parts.push('  var now = toggleFav(movieData.id);');
-  parts.push('  var btn = $("favBtn");');
-  parts.push('  if(now){btn.classList.add("saved");btn.textContent="✅ Saved";}');
-  parts.push('  else{btn.classList.remove("saved");btn.textContent="🔖 Save";}');
-  parts.push('}');
-  
-  parts.push('function openShare(){');
-  parts.push('  $("shareUrl").value = location.href;');
-  parts.push('  $("shareModal").style.display = "flex";');
-  parts.push('}');
-  parts.push('function closeShare(){$("shareModal").style.display="none";}');
-  
-  parts.push('function shareTo(type){');
-  parts.push('  var u = encodeURIComponent(location.href);');
-  parts.push('  var t = encodeURIComponent(movieData ? movieData.title : "Watch this!");');
-  parts.push('  var links = {');
-  parts.push('    fb: "https://www.facebook.com/sharer/sharer.php?u="+u,');
-  parts.push('    tw: "https://twitter.com/intent/tweet?url="+u+"&text="+t,');
-  parts.push('    wa: "https://wa.me/?text="+t+"%20"+u,');
-  parts.push('    tg: "https://t.me/share/url?url="+u+"&text="+t,');
-  parts.push('    rd: "https://www.reddit.com/submit?url="+u+"&title="+t,');
-  parts.push('    em: "mailto:?subject="+t+"&body="+u');
-  parts.push('  };');
-  parts.push('  if(type==="cp"){');
-  parts.push('    navigator.clipboard.writeText(location.href).then(function(){');
-  parts.push('      alert("Link copied!");');
-  parts.push('      closeShare();');
-  parts.push('    }).catch(function(){');
-  parts.push('      var inp = $("shareUrl");inp.select();document.execCommand("copy");alert("Link copied!");');
-  parts.push('    });');
-  parts.push('    return;');
-  parts.push('  }');
-  parts.push('  if(type==="nv"){');
-  parts.push('    if(navigator.share){');
-  parts.push('      navigator.share({title: movieData?movieData.title:"Video", url: location.href}).catch(function(){});');
-  parts.push('    }else{alert("Native share not supported");}');
-  parts.push('    return;');
-  parts.push('  }');
-  parts.push('  if(links[type]) window.open(links[type], "_blank");');
-  parts.push('}');
-  
-  parts.push('async function loadRelated(){');
-  parts.push('  if(!id)return;');
-  parts.push('  try{');
-  parts.push('    var r = await fetch("/api/movies/related?id="+id);');
-  parts.push('    var d = await r.json();');
-  parts.push('    relatedList = d.items || [];');
-  parts.push('    var g = $("relatedGrid");');
-  parts.push('    g.innerHTML = "";');
-  parts.push('    if(!relatedList.length){');
-  parts.push('      g.innerHTML = \'<p style="color:#666;grid-column:1/-1">No related videos</p>\';');
-  parts.push('      return;');
-  parts.push('    }');
-  parts.push('    relatedList.forEach(function(m){');
-  parts.push('      var a = document.createElement("a");');
-  parts.push('      a.className = "rcard";');
-  parts.push('      a.href = "/watch?id="+m.id;');
-  parts.push('      var s = m.thumbnail ? ("background-image:url(\'" + m.thumbnail + "\')") : "";');
-  parts.push('      var v = m.views || (Math.floor(Math.random()*4500)+500);');
-  parts.push('      a.innerHTML = \'<div class="rthumb" style="\'+s+\'"><div class="rplay">▶</div></div><div class="rinfo"><h4>\'+esc(m.title)+\'</h4><div class="rviews">👁 \'+fmtViews(v)+\'</div></div>\';');
-  parts.push('      g.appendChild(a);');
-  parts.push('    });');
-  parts.push('    updatePrevNext();');
-  parts.push('  }catch(e){}');
-  parts.push('}');
-  
-  parts.push('function updatePrevNext(){');
-  parts.push('  if(!relatedList.length)return;');
-  parts.push('  var idx = 0;');
-  parts.push('  prevMovie = relatedList[idx % relatedList.length];');
-  parts.push('  nextMovie = relatedList[(idx+1) % relatedList.length];');
-  parts.push('  if(prevMovie){var pb=$("prevBtn");if(pb)pb.disabled=false;}');
-  parts.push('  if(nextMovie){var nb=$("nextBtn");if(nb)nb.disabled=false;}');
-  parts.push('}');
-  
-  parts.push('function goPrev(){if(prevMovie)location.href="/watch?id="+prevMovie.id;}');
-  parts.push('function goNext(){if(nextMovie)location.href="/watch?id="+nextMovie.id;}');
-  
-  parts.push('async function loadTrending(){');
-  parts.push('  try{');
-  parts.push('    var r = await fetch("/api/movies/trending");');
-  parts.push('    var d = await r.json();');
-  parts.push('    var g = $("trendingList");');
-  parts.push('    g.innerHTML = "";');
-  parts.push('    if(!d.items || !d.items.length)return;');
-  parts.push('    d.items.forEach(function(m, i){');
-  parts.push('      var a = document.createElement("a");');
-  parts.push('      a.className = "tcard";');
-  parts.push('      a.href = "/watch?id="+m.id;');
-  parts.push('      var s = m.thumbnail ? ("background-image:url(\'" + m.thumbnail + "\')") : "";');
-  parts.push('      var v = m.views || (Math.floor(Math.random()*4500)+500);');
-  parts.push('      a.innerHTML = \'<div class="tthumb" style="\'+s+\'"><div class="tnum">#\'+(i+1)+\'</div></div><div class="tinfo"><h4>\'+esc(m.title)+\'</h4><div class="tviews">👁 \'+fmtViews(v)+\' views</div></div>\';');
-  parts.push('      g.appendChild(a);');
-  parts.push('    });');
-  parts.push('  }catch(e){}');
-  parts.push('}');
-  
-  parts.push('function renderContinue(){');
-  parts.push('  var h = getHistory();');
-  parts.push('  var others = h.filter(function(x){return x.id !== id;});');
-  parts.push('  if(!others.length){$("continueWrap").style.display="none";return;}');
-  parts.push('  $("continueWrap").style.display="block";');
-  parts.push('  var row = $("continueRow");');
-  parts.push('  row.innerHTML = "";');
-  parts.push('  others.slice(0, 8).forEach(function(m){');
-  parts.push('    var a = document.createElement("a");');
-  parts.push('    a.className = "ccard";');
-  parts.push('    a.href = "/watch?id="+m.id;');
-  parts.push('    var s = m.thumbnail ? ("background-image:url(\'" + m.thumbnail + "\')") : "";');
-  parts.push('    a.innerHTML = \'<div class="cthumb" style="\'+s+\'"></div><div class="cinfo"><h4>\'+esc(m.title)+\'</h4></div>\';');
-  parts.push('    row.appendChild(a);');
-  parts.push('  });');
-  parts.push('}');
-  
-  parts.push('async function showInterstitialAd(){');
-  parts.push('  var adBox = $("interstitialAdBox");');
-  parts.push('  var skipBtn = $("skipBtn");');
-  parts.push('  var viewAdBtn = $("viewAdBtn");');
-  parts.push('  var adUrl = "";');
-  parts.push('  try{');
-  parts.push('    var ar=await fetch("/api/interval-link");');
-  parts.push('    var ad=await ar.json();');
-  parts.push('    if(ad.url && ad.url.trim() && (ad.url.trim().startsWith("http://") || ad.url.trim().startsWith("https://"))){');
-  parts.push('      adUrl = ad.url.trim();');
-  parts.push('      adBox.innerHTML = \'<iframe src="\'+adUrl+\'" allowfullscreen></iframe>\';');
-  parts.push('    } else {');
-  parts.push('      $("interstitialModal").style.display = "none";');
-  parts.push('      playVideo();');
-  parts.push('      return;');
-  parts.push('    }');
-  parts.push('  }catch(e){');
-  parts.push('    $("interstitialModal").style.display = "none";');
-  parts.push('    playVideo();');
-  parts.push('    return;');
-  parts.push('  }');
-  parts.push('  var timeLeft = 5;');
-  parts.push('  skipBtn.textContent = "Please Wait (" + timeLeft + ")";');
-  parts.push('  var timer = setInterval(function(){');
-  parts.push('    timeLeft--;');
-  parts.push('    if(timeLeft > 0){');
-  parts.push('      skipBtn.textContent = "Please Wait (" + timeLeft + ")";');
-  parts.push('    } else {');
-  parts.push('      clearInterval(timer);');
-  parts.push('      if(adUrl !== ""){ viewAdBtn.style.display = "block"; }');
-  parts.push('      skipBtn.textContent = "Watch Video ▶";');
-  parts.push('      skipBtn.classList.add("active");');
-  parts.push('      skipBtn.disabled = false;');
-  parts.push('      skipBtn.onclick = function(){');
-  parts.push('        $("interstitialModal").style.display = "none";');
-  parts.push('        playVideo();');
-  parts.push('      };');
-  parts.push('      if(adUrl !== "") {');
-  parts.push('        viewAdBtn.onclick = function(){ window.open(adUrl, "_blank"); };');
-  parts.push('      }');
-  parts.push('    }');
-  parts.push('  }, 1000);');
-  parts.push('}');
-  
-  parts.push('function playVideo(){');
-  parts.push('  if(!movieData) return;');
-  parts.push('  markWatched(movieData.id);');
-  parts.push('  var pb = $("pb");');
-  parts.push('  pb.style.display = "block";');
-  parts.push('  $("ctrl").style.display="flex";');
-  parts.push('  pb.innerHTML = "";');
-  parts.push('  $("videoError").classList.remove("show");');
-  
-  parts.push('  var direct=/\\.(mp4|webm|ogg|m3u8)(\\?|$)/i.test(movieData.videoUrl);');
-  parts.push('  if(direct){');
-  parts.push('    var v=document.createElement("video");');
-  parts.push('    v.src=movieData.videoUrl;v.controls=true;v.autoplay=true;v.playsInline=true;');
-  parts.push('    v.onended = function(){ onVideoEnded(); };');
-  parts.push('    v.onerror = function(){ showVideoError(); };');
-  parts.push('    v.onloadeddata = function(){ $("videoError").classList.remove("show"); };');
-  parts.push('    pb.appendChild(v);');
-  parts.push('  }else{');
-  parts.push('    var f=document.createElement("iframe");');
-  parts.push('    f.src=movieData.videoUrl;');
-  parts.push('    f.allow="autoplay; encrypted-media; picture-in-picture; fullscreen;";');
-  parts.push('    f.allowFullscreen=true;');
-  parts.push('    f.setAttribute("webkitallowfullscreen", "true");');
-  parts.push('    f.setAttribute("mozallowfullscreen", "true");');
-  parts.push('    f.referrerPolicy="no-referrer";');
-  parts.push('    pb.appendChild(f);');
-  parts.push('  }');
-  parts.push('  trackView();');
-  parts.push('  var isAdmin = localStorage.getItem("admin_token");');
-  parts.push('  if(!isAdmin){');
-  parts.push('    try{');
-  parts.push('      fetch("/api/ads").then(r=>r.json()).then(ad=>{');
-  parts.push('        if(ad.code && ad.code.trim()) injectAds("adBox", ad.code);');
-  parts.push('      });');
-  parts.push('    }catch(e){}');
-  parts.push('  }');
-  parts.push('}');
-  
-  parts.push('function showVideoError(){');
-  parts.push('  $("videoError").classList.add("show");');
-  parts.push('}');
-  
-  parts.push('function onVideoEnded(){');
-  parts.push('  if(!nextMovie)return;');
-  parts.push('  autoNextTarget = nextMovie;');
-  parts.push('  autoNextCount = 5;');
-  parts.push('  $("anTitle").textContent = "▶ " + nextMovie.title;');
-  parts.push('  $("anCount").textContent = autoNextCount;');
-  parts.push('  $("autoNextBox").style.display = "flex";');
-  parts.push('  autoNextTimer = setInterval(function(){');
-  parts.push('    autoNextCount--;');
-  parts.push('    if(autoNextCount <= 0){');
-  parts.push('      clearInterval(autoNextTimer);');
-  parts.push('      playNextNow();');
-  parts.push('    } else {');
-  parts.push('      $("anCount").textContent = autoNextCount;');
-  parts.push('    }');
-  parts.push('  }, 1000);');
-  parts.push('}');
-  
-  parts.push('function playNextNow(){');
-  parts.push('  clearInterval(autoNextTimer);');
-  parts.push('  if(autoNextTarget) location.href = "/watch?id=" + autoNextTarget.id;');
-  parts.push('}');
-  
-  parts.push('function cancelAutoNext(){');
-  parts.push('  clearInterval(autoNextTimer);');
-  parts.push('  $("autoNextBox").style.display = "none";');
-  parts.push('}');
-  
-  parts.push('detectAdBlocker();');
-  parts.push('loadData();');
-  parts.push('<\/script>');
-  parts.push('</body></html>');
-  return parts.join("\n");
-}
+  parts.push('  html += \'<button
 // ================= ADMIN PAGE =================
 function adminPage() {
 const parts = [];
