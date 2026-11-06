@@ -22,7 +22,6 @@ export default {
     if (p === "/api/movie" && request.method === "GET") return getSingleMovie(env, url);
     if (p === "/api/fetch-source" && request.method === "POST") return fetchSourceData(request);
     
-    // NEW endpoints
     if (p === "/api/movies/related" && request.method === "GET") return getRelatedMovies(env, url);
     if (p === "/api/movies/trending" && request.method === "GET") return getTrendingMovies(env);
     if (p === "/api/movies/track-view" && request.method === "POST") return trackView(request, env);
@@ -44,6 +43,10 @@ async function getRelatedMovies(env, url) {
   let list = raw ? JSON.parse(raw) : [];
   const others = list.filter(m => m.id !== id);
   
+  for (let m of others) {
+    if (!m.views) m.views = Math.floor(Math.random() * 4500) + 500;
+  }
+  
   const shuffled = others
     .map(m => ({ m, r: Math.random() }))
     .sort((a, b) => a.r - b.r)
@@ -57,6 +60,10 @@ async function getRelatedMovies(env, url) {
 async function getTrendingMovies(env) {
   const raw = await env.MOVIES.get("movie_list");
   let list = raw ? JSON.parse(raw) : [];
+  
+  for (let m of list) {
+    if (!m.views) m.views = Math.floor(Math.random() * 4500) + 500;
+  }
   
   const sorted = list
     .map(m => ({ m, score: (m.views || 0) + Math.random() * 500 }))
@@ -80,10 +87,13 @@ async function trackView(request, env) {
     const idx = list.findIndex(m => m.id === id);
     if (idx === -1) return json({ error: "Not found" }, 404);
     
-    if (!list[idx].views) list[idx].views = Math.floor(Math.random() * 4500) + 500;
+    if (!list[idx].views) {
+      list[idx].views = Math.floor(Math.random() * 4500) + 500;
+    }
     list[idx].views += Math.floor(Math.random() * 8) + 1;
     
     await env.MOVIES.put("movie_list", JSON.stringify(list));
+    
     return json({ success: true, views: list[idx].views });
   } catch (e) {
     return json({ error: e.message }, 500);
@@ -560,8 +570,8 @@ function homePage() {
   parts.push('      var s=m.thumbnail?("background-image:url(\'" + m.thumbnail + "\')"):"";');
   parts.push('      var isW = watchedSet[String(m.id)];');
   parts.push('      var badge = isW ? \'<div class="watched-badge">✓ Watched</div>\' : \'\';');
-  parts.push('      var v = m.views ? fmtViews(m.views) : (Math.floor(Math.random()*4500)+500);');
-  parts.push('      var vb = \'<div class="views-badge">👁 \' + (typeof v === "number" ? fmtViews(v) : v) + \'</div>\';');
+  parts.push('      var v = m.views || (Math.floor(Math.random()*4500)+500);');
+  parts.push('      var vb = \'<div class="views-badge">👁 \' + fmtViews(v) + \'</div>\';');
   parts.push('      a.innerHTML=\'<div class="thumb" style="\'+s+\'">\'+badge+vb+\'<div class="play">▶</div></div><div class="info"><h3>\'+esc(m.title)+\'</h3></div>\';');
   parts.push('      if(isW) a.style.opacity="0.65";');
   parts.push('      a.onclick = function() { window.location.href = "/watch?id="+m.id; };');
@@ -873,6 +883,7 @@ function watchPage(id) {
   parts.push('    if(!r.ok)throw new Error("Not found");');
   parts.push('    var d=await r.json();');
   parts.push('    movieData=d.movie;');
+  parts.push('    if(!movieData.views) movieData.views = Math.floor(Math.random()*4500)+500;');
   parts.push('    document.title = movieData.title + " - AdultMovie";');
   parts.push('    $("t").textContent=movieData.title;');
   parts.push('    renderMeta();');
@@ -883,7 +894,6 @@ function watchPage(id) {
   parts.push('    loadRelated();');
   parts.push('    loadTrending();');
   parts.push('    renderContinue();');
-  parts.push('    trackView();');
   parts.push('  }catch(err){');
   parts.push('    $("t").textContent="Video Not Found";');
   parts.push('  }');
@@ -891,12 +901,19 @@ function watchPage(id) {
   
   parts.push('function trackView(){');
   parts.push('  if(!movieData)return;');
-  parts.push('  fetch("/api/movies/track-view",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:movieData.id})});');
+  parts.push('  fetch("/api/movies/track-view",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:movieData.id})})');
+  parts.push('    .then(function(r){return r.json()})');
+  parts.push('    .then(function(d){');
+  parts.push('      if(d.success && d.views){');
+  parts.push('        movieData.views = d.views;');
+  parts.push('        renderMeta();');
+  parts.push('      }');
+  parts.push('    }).catch(function(){});');
   parts.push('}');
   
   parts.push('function renderMeta(){');
   parts.push('  if(!movieData)return;');
-  parts.push('  var v = movieData.views || 0;');
+  parts.push('  var v = movieData.views || Math.floor(Math.random()*4500)+500;');
   parts.push('  var ago = fmtAgo(movieData.createdAt);');
   parts.push('  $("metaBar").innerHTML = \'<span class="views">👁️ \'+fmtViews(v)+\' views</span><span class="date">📅 \'+ago+\'</span>\';');
   parts.push('}');
@@ -973,7 +990,8 @@ function watchPage(id) {
   parts.push('      a.className = "rcard";');
   parts.push('      a.href = "/watch?id="+m.id;');
   parts.push('      var s = m.thumbnail ? ("background-image:url(\'" + m.thumbnail + "\')") : "";');
-  parts.push('      a.innerHTML = \'<div class="rthumb" style="\'+s+\'"><div class="rplay">▶</div></div><div class="rinfo"><h4>\'+esc(m.title)+\'</h4><div class="rviews">👁 \'+fmtViews(m.views||0)+\'</div></div>\';');
+  parts.push('      var v = m.views || (Math.floor(Math.random()*4500)+500);');
+  parts.push('      a.innerHTML = \'<div class="rthumb" style="\'+s+\'"><div class="rplay">▶</div></div><div class="rinfo"><h4>\'+esc(m.title)+\'</h4><div class="rviews">👁 \'+fmtViews(v)+\'</div></div>\';');
   parts.push('      g.appendChild(a);');
   parts.push('    });');
   parts.push('    updatePrevNext();');
@@ -1004,7 +1022,8 @@ function watchPage(id) {
   parts.push('      a.className = "tcard";');
   parts.push('      a.href = "/watch?id="+m.id;');
   parts.push('      var s = m.thumbnail ? ("background-image:url(\'" + m.thumbnail + "\')") : "";');
-  parts.push('      a.innerHTML = \'<div class="tthumb" style="\'+s+\'"><div class="tnum">#\'+(i+1)+\'</div></div><div class="tinfo"><h4>\'+esc(m.title)+\'</h4><div class="tviews">👁 \'+fmtViews(m.views||0)+\' views</div></div>\';');
+  parts.push('      var v = m.views || (Math.floor(Math.random()*4500)+500);');
+  parts.push('      a.innerHTML = \'<div class="tthumb" style="\'+s+\'"><div class="tnum">#\'+(i+1)+\'</div></div><div class="tinfo"><h4>\'+esc(m.title)+\'</h4><div class="tviews">👁 \'+fmtViews(v)+\' views</div></div>\';');
   parts.push('      g.appendChild(a);');
   parts.push('    });');
   parts.push('  }catch(e){}');
@@ -1092,6 +1111,7 @@ function watchPage(id) {
   parts.push('    f.referrerPolicy="no-referrer";');
   parts.push('    pb.appendChild(f);');
   parts.push('  }');
+  parts.push('  trackView();');
   parts.push('  var isAdmin = localStorage.getItem("admin_token");');
   parts.push('  if(!isAdmin){');
   parts.push('    try{');
