@@ -643,7 +643,6 @@ function watchPage(id) {
   parts.push('async function loadTrending(){ try{ var r = await fetch("/api/movies/trending"); var d = await r.json(); var g = $("trendingList"); g.innerHTML = ""; if(!d.items || !d.items.length)return; d.items.forEach(function(m, i){ var a = document.createElement("a"); a.className = "tcard"; a.href = "/watch?id="+m.id; var s = m.thumbnail ? ("background-image:url(\'" + m.thumbnail + "\')") : ""; var v = m.views || (Math.floor(Math.random()*4500)+500); a.innerHTML = \'<div class="tthumb" style="\'+s+\'"><div class="tnum">#\'+(i+1)+\'</div></div><div class="tinfo"><h4>\'+esc(m.title)+\'</h4><div class="tviews">👁 \'+fmtViews(v)+\' views</div></div>\'; g.appendChild(a); }); }catch(e){} }');
   parts.push('function renderContinue(){ var h = getHistory(); var others = h.filter(function(x){return x.id !== id;}); if(!others.length){$("continueWrap").style.display="none";return;} $("continueWrap").style.display="block"; var row = $("continueRow"); row.innerHTML = ""; others.slice(0, 8).forEach(function(m){ var a = document.createElement("a"); a.className = "ccard"; a.href = "/watch?id="+m.id; var s = m.thumbnail ? ("background-image:url(\'" + m.thumbnail + "\')") : ""; a.innerHTML = \'<div class="cthumb" style="\'+s+\'"></div><div class="cinfo"><h4>\'+esc(m.title)+\'</h4></div>\'; row.appendChild(a); }); }');
   parts.push('async function showInterstitialAd(){ var adBox = $("interstitialAdBox"); var skipBtn = $("skipBtn"); var viewAdBtn = $("viewAdBtn"); var adUrl = ""; try{ var ar=await fetch("/api/interval-link"); var ad=await ar.json(); if(ad.url && ad.url.trim() && (ad.url.trim().startsWith("http://") || ad.url.trim().startsWith("https://"))){ adUrl = ad.url.trim(); adBox.innerHTML = \'<iframe src="\'+adUrl+\'" allowfullscreen></iframe>\'; } else { $("interstitialModal").style.display = "none"; playVideo(); return; } }catch(e){ $("interstitialModal").style.display = "none"; playVideo(); return; } var timeLeft = 5; skipBtn.textContent = "Please Wait (" + timeLeft + ")"; var timer = setInterval(function(){ timeLeft--; if(timeLeft > 0){ skipBtn.textContent = "Please Wait (" + timeLeft + ")"; } else { clearInterval(timer); if(adUrl !== ""){ viewAdBtn.style.display = "block"; } skipBtn.textContent = "Watch Video ▶"; skipBtn.classList.add("active"); skipBtn.disabled = false; skipBtn.onclick = function(){ $("interstitialModal").style.display = "none"; playVideo(); }; if(adUrl !== "") { viewAdBtn.onclick = function(){ window.open(adUrl, "_blank"); }; } } }, 1000); }');
-
 parts.push('function playVideo(){');
 parts.push('  if(!movieData) return;');
 parts.push('  markWatched(movieData.id);');
@@ -656,7 +655,7 @@ parts.push('  $("loadingBox").style.display="flex";');
 parts.push('  var mp4Regex=/\\.(mp4|webm|ogg|m3u8)(\\?|$)/i;');
 parts.push('  var isMp4=mp4Regex.test(movieData.videoUrl);');
 parts.push('  if(isMp4){');
-  // ✅ Embed player for letsporn
+  // ✅ Try iframe first for letsporn embed
 parts.push('    var iframe = document.createElement("iframe");');
 parts.push('    var embedUrl = "https://letsporn.com/embed/" + movieData.id;');
 parts.push('    iframe.src = embedUrl;');
