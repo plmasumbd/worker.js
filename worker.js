@@ -39,9 +39,6 @@ export default {
   }
 };
 
-// ================= 
-  }
-}
 // ================= AUTO REFRESH LINK (Single) =================
 async function refreshMovieLink(request, env) {
   try {
@@ -54,15 +51,8 @@ async function refreshMovieLink(request, env) {
     const idx = list.findIndex(m => m.id === id);
     if (idx === -1) return json({ error: "Video not found" }, 404);
 
-    // Step 1: Search page for actual video URL
+    // Step 1: Fetch search page to find actual video URL
     const searchUrl = "https://letsporn.com/s-" + id;
-    const searchReq = new Request("https://dummy.com", {
-      method: "POST",
-      body: JSON.stringify({ url: searchUrl }),
-      headers: { "Content-Type": "application/json" }
-    });
-    
-    // We need to fetch the search page to find the actual video link
     let searchHtml = "";
     try {
       const sRes = await fetch(searchUrl, {
@@ -73,7 +63,6 @@ async function refreshMovieLink(request, env) {
       if (sRes.ok) searchHtml = await sRes.text();
     } catch (e) {}
 
-    // If blocked, try Jina reader
     if (!searchHtml || !searchHtml.includes("letsporn.com/")) {
       try {
         const jinaRes = await fetch("https://r.jina.ai/" + searchUrl);
@@ -81,17 +70,25 @@ async function refreshMovieLink(request, env) {
       } catch (e) {}
     }
 
-    // Find actual video URL from search page
+    if (!searchHtml) {
+      return json({ error: "Failed to load search page. Jina also failed." }, 400);
+    }
+
+    // Find actual video URL from search page - Search for /something-id pattern
     let actualVideoUrl = "";
-    if (searchHtml) {
-      // Look for links matching letsporn.com/[something]-[id]
-      const regex = new RegExp("https:\\/\\/letsporn\\.com\\/[a-z0-9\\-]+-" + id, "i");
-      const match = searchHtml.match(regex);
-      if (match) actualVideoUrl = match[0];
+    const regex = new RegExp("https:\\/\\/letsporn\\.com\\/[a-z0-9\\-]+-" + id, "i");
+    const match = searchHtml.match(regex);
+    if (match) actualVideoUrl = match[0];
+
+    if (!actualVideoUrl) {
+      // Try another pattern: href="/...-id"
+      const regex2 = new RegExp('href="(\\/[a-z0-9\\-]+-' + id + ')"', "i");
+      const match2 = searchHtml.match(regex2);
+      if (match2) actualVideoUrl = "https://letsporn.com" + match2[1];
     }
 
     if (!actualVideoUrl) {
-      return json({ error: "Could not find actual video page from search. (ID: " + id + ")" }, 400);
+      return json({ error: "Could not find actual video page (ID: " + id + "). Search page format changed." }, 400);
     }
 
     // Step 2: Fetch actual video page to get new .mp4 link
@@ -105,10 +102,9 @@ async function refreshMovieLink(request, env) {
     const sourceData = await sourceRes.json();
 
     if (!sourceData.success || !sourceData.data.videoUrl) {
-      return json({ error: "Failed to find new link from actual video page." }, 400);
+      return json({ error: "Failed to find new link from actual video page: " + actualVideoUrl }, 400);
     }
 
-    // Update the movie URL
     list[idx].videoUrl = sourceData.data.videoUrl;
     if (sourceData.data.thumbnail) list[idx].thumbnail = sourceData.data.thumbnail;
 
@@ -130,13 +126,13 @@ async function refreshAllLinks(request, env) {
     let list = raw ? JSON.parse(raw) : [];
     let successCount = 0;
     let failCount = 0;
+    let failedIds = [];
 
     for (let i = 0; i < list.length; i++) {
       try {
         const id = list[i].id;
         const searchUrl = "https://letsporn.com/s-" + id;
         
-        // Step 1: Find actual video page from search
         let searchHtml = "";
         try {
           const sRes = await fetch(searchUrl, {
@@ -154,19 +150,21 @@ async function refreshAllLinks(request, env) {
           } catch (e) {}
         }
 
+        if (!searchHtml) { failCount++; failedIds.push(id); continue; }
+
         let actualVideoUrl = "";
-        if (searchHtml) {
-          const regex = new RegExp("https:\\/\\/letsporn\\.com\\/[a-z0-9\\-]+-" + id, "i");
-          const match = searchHtml.match(regex);
-          if (match) actualVideoUrl = match[0];
-        }
+        const regex = new RegExp("https:\\/\\/letsporn\\.com\\/[a-z0-9\\-]+-" + id, "i");
+        const match = searchHtml.match(regex);
+        if (match) actualVideoUrl = match[0];
 
         if (!actualVideoUrl) {
-          failCount++;
-          continue;
+          const regex2 = new RegExp('href="(\\/[a-z0-9\\-]+-' + id + ')"', "i");
+          const match2 = searchHtml.match(regex2);
+          if (match2) actualVideoUrl = "https://letsporn.com" + match2[1];
         }
 
-        // Step 2: Fetch actual video page
+        if (!actualVideoUrl) { failCount++; failedIds.push(id); continue; }
+
         const fetchReq = new Request("https://dummy.com", {
           method: "POST",
           body: JSON.stringify({ url: actualVideoUrl }),
@@ -182,6 +180,7 @@ async function refreshAllLinks(request, env) {
           successCount++;
         } else {
           failCount++;
+          failedIds.push(id);
         }
       } catch (e) {
         failCount++;
@@ -189,7 +188,9 @@ async function refreshAllLinks(request, env) {
     }
 
     await env.MOVIES.put("movie_list", JSON.stringify(list));
-    return json({ success: true, message: `Refreshed: ${successCount} success, ${failCount} failed.` });
+    let msg = `Refreshed: ${successCount} success, ${failCount} failed.`;
+    if (failedIds.length > 0 && failedIds.length <= 5) msg += ` Failed IDs: ${failedIds.join(", ")}`;
+    return json({ success: true, message: msg });
   } catch (e) {
     return json({ error: e.message }, 500);
   }
@@ -1067,7 +1068,7 @@ function adminPage() {
   parts.push('<div id="tm">');
   parts.push('<div class="card auto-box">');
   parts.push('<h2 style="color:#fff;margin-bottom:10px;">⚡ Auto Extract from URL</h2>');
-  parts.push('<p class="hint" style="margin-bottom:10px;">Enter a link and extract the data automatically. <strong>This link will be saved to auto-refresh the video later.</strong></p>');
+  parts.push('<p class="hint" style="margin-bottom:10px;">Enter a link and extract the data automatically.</p>');
   parts.push('<input type="text" id="scrapeUrl" placeholder="https://example.com/video-page">');
   parts.push('<div style="display:flex; gap:10px; flex-wrap:wrap;">');
   parts.push('  <button class="primary" style="background:#ff9800; margin-top:10px;" id="scrapeBtn">Open & Extract</button>');
@@ -1224,7 +1225,7 @@ function adminPage() {
   parts.push(' var r=await fetch("/api/fetch-source",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:url})});');
   parts.push(' var d=await r.json();');
   parts.push(' if(r.ok && d.success){');
-  parts.push(' fillForm(d.data, url);');
+  parts.push(' fillForm(d.data);');
   parts.push(' m.textContent="Data fetched successfully!";m.className="msg ok show";');
   parts.push(' m.style.color="#b6ffb6";');
   parts.push(' }else{');
@@ -1260,7 +1261,7 @@ function adminPage() {
   parts.push(' }');
   parts.push('}');
 
-  parts.push('function fillForm(data, sourceUrl){');
+  parts.push('function fillForm(data){');
   parts.push(' $("title").value = data.title || "";');
   parts.push(' $("vurl").value = data.videoUrl || "";');
   parts.push(' $("thumb").value = data.thumbnail || "";');
@@ -1332,7 +1333,6 @@ function adminPage() {
   parts.push(' h4.insertAdjacentHTML("beforeend", getStatusBadge(m.id));');
   parts.push('}');
 
-  // ==== Auto Refresh Button in Admin ====
   parts.push('async function refreshLink(m, itemEl){');
   parts.push(' var btn = itemEl.querySelector(".refresh-btn");');
   parts.push(' if(btn){ btn.textContent="Refreshing..."; btn.disabled=true; }');
@@ -1340,7 +1340,6 @@ function adminPage() {
   parts.push(' var r = await fetch("/api/movies/refresh-link",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({id:m.id})});');
   parts.push(' var d = await r.json();');
   parts.push(' if(r.ok && d.success){');
-  parts.push(' m.videoUrl = d.videoUrl;');
   parts.push(' loadList();');
   parts.push(' } else {');
   parts.push(' alert(d.error || "Failed to refresh link");');
@@ -1369,7 +1368,6 @@ function adminPage() {
   parts.push(' loadList();');
   parts.push('}');
 
-  // ==== Refresh All Links ====
   parts.push('async function refreshAllLinks(btn){');
   parts.push(' if(!confirm("Are you sure you want to refresh ALL video links? This may take some time.")) return;');
   parts.push(' btn.disabled = true;');
