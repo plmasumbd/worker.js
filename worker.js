@@ -38,7 +38,6 @@ export default {
     return new Response("404", { status: 404 });
   }
 };
-
 // ================= AUTO REFRESH LINK (Single) =================
 async function refreshMovieLink(request, env) {
   try {
@@ -51,68 +50,103 @@ async function refreshMovieLink(request, env) {
     const idx = list.findIndex(m => m.id === id);
     if (idx === -1) return json({ error: "Video not found" }, 404);
 
-    // Step 1: Fetch search page to find actual video URL
+    // Step 1: Fetch search page
     const searchUrl = "https://letsporn.com/s-" + id;
     let searchHtml = "";
+    
     try {
       const sRes = await fetch(searchUrl, {
         headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.5"
         }
       });
       if (sRes.ok) searchHtml = await sRes.text();
     } catch (e) {}
 
-    if (!searchHtml || !searchHtml.includes("letsporn.com/")) {
+    if (!searchHtml || searchHtml.length < 500) {
       try {
-        const jinaRes = await fetch("https://r.jina.ai/" + searchUrl);
+        const jinaRes = await fetch("https://r.jina.ai/" + searchUrl, { headers: { "Accept": "text/plain" } });
         if (jinaRes.ok) searchHtml = await jinaRes.text();
       } catch (e) {}
     }
 
     if (!searchHtml) {
-      return json({ error: "Failed to load search page. Jina also failed." }, 400);
+      return json({ error: "Failed to load search page (Step 1). Search URL: " + searchUrl }, 400);
     }
 
-    // Find actual video URL from search page - Search for /something-id pattern
+    // Try to find actual video URL from search page
     let actualVideoUrl = "";
-    const regex = new RegExp("https:\\/\\/letsporn\\.com\\/[a-z0-9\\-]+-" + id, "i");
-    const match = searchHtml.match(regex);
+    // Pattern 1: Full URL
+    let match = searchHtml.match(new RegExp("https?:\\/\\/letsporn\\.com\\/[a-z0-9\\-]+-" + id, "i"));
     if (match) actualVideoUrl = match[0];
-
-    if (!actualVideoUrl) {
-      // Try another pattern: href="/...-id"
-      const regex2 = new RegExp('href="(\\/[a-z0-9\\-]+-' + id + ')"', "i");
-      const match2 = searchHtml.match(regex2);
-      if (match2) actualVideoUrl = "https://letsporn.com" + match2[1];
-    }
-
-    if (!actualVideoUrl) {
-      return json({ error: "Could not find actual video page (ID: " + id + "). Search page format changed." }, 400);
-    }
-
-    // Step 2: Fetch actual video page to get new .mp4 link
-    const fetchReq = new Request("https://dummy.com", {
-      method: "POST",
-      body: JSON.stringify({ url: actualVideoUrl }),
-      headers: { "Content-Type": "application/json" }
-    });
     
-    const sourceRes = await fetchSourceData(fetchReq);
-    const sourceData = await sourceRes.json();
-
-    if (!sourceData.success || !sourceData.data.videoUrl) {
-      return json({ error: "Failed to find new link from actual video page: " + actualVideoUrl }, 400);
+    // Pattern 2: href="/xxx-id"
+    if (!actualVideoUrl) {
+      match = searchHtml.match(new RegExp('href="(\\/[a-z0-9\\-]+-' + id + ')"', "i"));
+      if (match) actualVideoUrl = "https://letsporn.com" + match[1];
     }
 
-    list[idx].videoUrl = sourceData.data.videoUrl;
-    if (sourceData.data.thumbnail) list[idx].thumbnail = sourceData.data.thumbnail;
+    // Pattern 3: Just the slug-id
+    if (!actualVideoUrl) {
+      match = searchHtml.match(new RegExp('"\\/([a-z0-9\\-]+-' + id + ')"', "i"));
+      if (match) actualVideoUrl = "https://letsporn.com/" + match[1];
+    }
+
+    if (!actualVideoUrl) {
+      return json({ error: "Could not find video page (Step 1). HTML length: " + searchHtml.length + ". First 200 chars: " + searchHtml.substring(0, 200) }, 400);
+    }
+
+    // Step 2: Fetch actual video page
+    let pageHtml = "";
+    try {
+      const pRes = await fetch(actualVideoUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+        }
+      });
+      if (pRes.ok) pageHtml = await pRes.text();
+    } catch (e) {}
+
+    if (!pageHtml || pageHtml.length < 500) {
+      try {
+        const jinaRes = await fetch("https://r.jina.ai/" + actualVideoUrl, { headers: { "Accept": "text/plain" } });
+        if (jinaRes.ok) pageHtml = await jinaRes.text();
+      } catch (e) {}
+    }
+
+    if (!pageHtml) {
+      return json({ error: "Failed to load video page (Step 2). URL: " + actualVideoUrl }, 400);
+    }
+
+    // Extract video URL
+    const getMatch = (key) => {
+      let regex = new RegExp(key + "\\s*:\\s*['\"]([^'\"]+)['\"]", "i");
+      let m = pageHtml.match(regex);
+      if (m) return m[1];
+      regex = new RegExp('"' + key + '"\\s*:\\s*"([^"]+)"', "i");
+      m = pageHtml.match(regex);
+      if (m) return m[1];
+      return "";
+    };
+
+    let newVideoUrl = getMatch('video_alt_url') || getMatch('video_url');
+    let newThumb = getMatch('preview_url') || getMatch('preview_url1');
+
+    if (!newVideoUrl) {
+      return json({ error: "Could not find video URL in page (Step 2). Page URL: " + actualVideoUrl + ". HTML length: " + pageHtml.length }, 400);
+    }
+
+    // Update
+    list[idx].videoUrl = newVideoUrl;
+    if (newThumb) list[idx].thumbnail = newThumb;
 
     await env.MOVIES.put("movie_list", JSON.stringify(list));
 
-    return json({ success: true, videoUrl: sourceData.data.videoUrl, message: "Link refreshed successfully!" });
+    return json({ success: true, videoUrl: newVideoUrl, message: "Link refreshed successfully!" });
   } catch (e) {
-    return json({ error: e.message }, 500);
+    return json({ error: "Exception: " + e.message }, 500);
   }
 }
 
@@ -126,14 +160,14 @@ async function refreshAllLinks(request, env) {
     let list = raw ? JSON.parse(raw) : [];
     let successCount = 0;
     let failCount = 0;
-    let failedIds = [];
+    let errors = [];
 
     for (let i = 0; i < list.length; i++) {
       try {
         const id = list[i].id;
         const searchUrl = "https://letsporn.com/s-" + id;
-        
         let searchHtml = "";
+        
         try {
           const sRes = await fetch(searchUrl, {
             headers: {
@@ -143,53 +177,75 @@ async function refreshAllLinks(request, env) {
           if (sRes.ok) searchHtml = await sRes.text();
         } catch (e) {}
 
-        if (!searchHtml || !searchHtml.includes("letsporn.com/")) {
+        if (!searchHtml || searchHtml.length < 500) {
           try {
             const jinaRes = await fetch("https://r.jina.ai/" + searchUrl);
             if (jinaRes.ok) searchHtml = await jinaRes.text();
           } catch (e) {}
         }
 
-        if (!searchHtml) { failCount++; failedIds.push(id); continue; }
+        if (!searchHtml) { failCount++; errors.push(id + ": search page failed"); continue; }
 
         let actualVideoUrl = "";
-        const regex = new RegExp("https:\\/\\/letsporn\\.com\\/[a-z0-9\\-]+-" + id, "i");
-        const match = searchHtml.match(regex);
+        let match = searchHtml.match(new RegExp("https?:\\/\\/letsporn\\.com\\/[a-z0-9\\-]+-" + id, "i"));
         if (match) actualVideoUrl = match[0];
-
+        
         if (!actualVideoUrl) {
-          const regex2 = new RegExp('href="(\\/[a-z0-9\\-]+-' + id + ')"', "i");
-          const match2 = searchHtml.match(regex2);
-          if (match2) actualVideoUrl = "https://letsporn.com" + match2[1];
+          match = searchHtml.match(new RegExp('href="(\\/[a-z0-9\\-]+-' + id + ')"', "i"));
+          if (match) actualVideoUrl = "https://letsporn.com" + match[1];
         }
 
-        if (!actualVideoUrl) { failCount++; failedIds.push(id); continue; }
+        if (!actualVideoUrl) { failCount++; errors.push(id + ": no video page"); continue; }
 
-        const fetchReq = new Request("https://dummy.com", {
-          method: "POST",
-          body: JSON.stringify({ url: actualVideoUrl }),
-          headers: { "Content-Type": "application/json" }
-        });
-        
-        const sourceRes = await fetchSourceData(fetchReq);
-        const sourceData = await sourceRes.json();
+        let pageHtml = "";
+        try {
+          const pRes = await fetch(actualVideoUrl, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+            }
+          });
+          if (pRes.ok) pageHtml = await pRes.text();
+        } catch (e) {}
 
-        if (sourceData.success && sourceData.data.videoUrl) {
-          list[i].videoUrl = sourceData.data.videoUrl;
-          if (sourceData.data.thumbnail) list[i].thumbnail = sourceData.data.thumbnail;
+        if (!pageHtml || pageHtml.length < 500) {
+          try {
+            const jinaRes = await fetch("https://r.jina.ai/" + actualVideoUrl);
+            if (jinaRes.ok) pageHtml = await jinaRes.text();
+          } catch (e) {}
+        }
+
+        if (!pageHtml) { failCount++; errors.push(id + ": video page failed"); continue; }
+
+        const getMatch = (key) => {
+          let regex = new RegExp(key + "\\s*:\\s*['\"]([^'\"]+)['\"]", "i");
+          let m = pageHtml.match(regex);
+          if (m) return m[1];
+          regex = new RegExp('"' + key + '"\\s*:\\s*"([^"]+)"', "i");
+          m = pageHtml.match(regex);
+          if (m) return m[1];
+          return "";
+        };
+
+        let newVideoUrl = getMatch('video_alt_url') || getMatch('video_url');
+        let newThumb = getMatch('preview_url') || getMatch('preview_url1');
+
+        if (newVideoUrl) {
+          list[i].videoUrl = newVideoUrl;
+          if (newThumb) list[i].thumbnail = newThumb;
           successCount++;
         } else {
           failCount++;
-          failedIds.push(id);
+          errors.push(id + ": no video url in page");
         }
       } catch (e) {
         failCount++;
+        errors.push(id + ": " + e.message);
       }
     }
 
     await env.MOVIES.put("movie_list", JSON.stringify(list));
     let msg = `Refreshed: ${successCount} success, ${failCount} failed.`;
-    if (failedIds.length > 0 && failedIds.length <= 5) msg += ` Failed IDs: ${failedIds.join(", ")}`;
+    if (errors.length > 0) msg += "\n\nErrors:\n" + errors.slice(0, 5).join("\n");
     return json({ success: true, message: msg });
   } catch (e) {
     return json({ error: e.message }, 500);
