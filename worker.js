@@ -1184,14 +1184,54 @@ parts.push(' }, 1000);');
 parts.push('}');
 
 parts.push('function playVideo(){');
-parts.push(' if(!movieData) return;');
-parts.push(' markWatched(movieData.id);');
-parts.push(' var pb = $("pb");');
-parts.push(' pb.style.display = "block";');
-parts.push(' $("ctrl").style.display="flex";');
-parts.push(' pb.innerHTML = "";');
-parts.push(' $("videoError").classList.remove("show");');
+parts.push('  if(!movieData) return;');
+parts.push('  markWatched(movieData.id);');
+parts.push('  var pb = $("pb");');
+parts.push('  pb.style.display = "block";');
+parts.push('  $("ctrl").style.display="flex";');
+parts.push('  pb.innerHTML = "";');
+parts.push('  $("videoError").classList.remove("show");');
+// লোডিং শুরু
+parts.push('  $("loadingBox").style.display="flex";');
 
+parts.push('  var direct=/\\.(mp4|webm|ogg|m3u8)(\\?|$)/i.test(movieData.videoUrl);');
+parts.push('  if(direct){');
+parts.push('    var v=document.createElement("video");');
+parts.push('    v.src=movieData.videoUrl;v.controls=true;v.autoplay=true;v.playsInline=true;');
+parts.push('    v.onended = function(){ onVideoEnded(); };');
+parts.push('    v.onerror = function(){ showVideoError(); };');
+parts.push('    v.onloadeddata = function(){ $("loadingBox").style.display="none"; };');
+parts.push('    pb.appendChild(v);');
+parts.push('  }else{');
+parts.push('    var f=document.createElement("iframe");');
+parts.push('    f.src=movieData.videoUrl;');
+parts.push('    f.allow="autoplay; encrypted-media; picture-in-picture; fullscreen;";');
+parts.push('    f.allowFullscreen=true;');
+parts.push('    f.setAttribute("webkitallowfullscreen", "true");');
+parts.push('    f.setAttribute("mozallowfullscreen", "true");');
+parts.push('    f.referrerPolicy="no-referrer";');
+
+// ১ সেকেন্ড পর লোডার হাইড করবে, তারপরও যদি ভিডিও লোড না হয়, ৮ সেকেন্ড পর এরর দেখাবে
+parts.push('    f.onload = function(){ ');
+parts.push('      setTimeout(function(){ $("loadingBox").style.display="none"; }, 1000); ');
+parts.push('    };');
+parts.push('    setTimeout(function(){ ');
+parts.push('      if($("loadingBox").style.display !== "none"){ showVideoError(); }');
+parts.push('    }, 8000);');
+
+parts.push('    pb.appendChild(f);');
+parts.push('  }');
+parts.push('  trackView();');
+parts.push('  var isAdmin = localStorage.getItem("admin_token");');
+parts.push('  if(!isAdmin){');
+parts.push('    try{');
+parts.push('      fetch("/api/ads").then(r=>r.json()).then(ad=>{');
+parts.push('        if(ad.code && ad.code.trim()) injectAds("adBox", ad.code);');
+parts.push('      });');
+parts.push('    }catch(e){}');
+parts.push('  }');
+parts.push('}');
+  
 parts.push(' var direct=/\\.(mp4|webm|ogg|m3u8)(\\?|$)/i.test(movieData.videoUrl);');
 parts.push(' if(direct){');
 parts.push(' var v=document.createElement("video");');
