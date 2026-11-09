@@ -437,8 +437,8 @@ function watchPage(id) {
   parts.push('header a.back-btn{color:#eee;text-decoration:none;padding:8px 14px;background:#ff0040;border-radius:6px;font-size:14px}');
   parts.push('.wrap{max-width:1200px;margin:24px auto;padding:0 20px}');
   parts.push('.player-wrap{position:relative;width:100%; aspect-ratio:16/9; background:#000; border-radius:10px; overflow:hidden; display:flex; align-items:center; justify-content:center;}');
-  parts.push('.player {width:100%; height:100%; position:relative;}');
-  parts.push('.player iframe, .player video{width:100%;height:100%;border:0;display:block; object-fit:contain;}');
+parts.push('.player {width:100%; height:100%; position:relative;}');
+parts.push('.player iframe, .player video{width:100%;height:100%;border:0;display:block; object-fit:contain;}');
   parts.push('body.fs-mode{overflow:hidden;background:#000;}');
   parts.push('body.fs-mode .player-wrap:fullscreen{width:100vw !important; height:100vh !important; border-radius:0 !important;}');
   parts.push('body.fs-mode .player-wrap:-webkit-full-screen{width:100vw !important; height:100vh !important; border-radius:0 !important;}');
