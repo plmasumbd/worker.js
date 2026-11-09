@@ -39,6 +39,9 @@ export default {
   }
 };
 
+// ================= 
+  }
+}
 // ================= AUTO REFRESH LINK (Single) =================
 async function refreshMovieLink(request, env) {
   try {
@@ -51,23 +54,63 @@ async function refreshMovieLink(request, env) {
     const idx = list.findIndex(m => m.id === id);
     if (idx === -1) return json({ error: "Video not found" }, 404);
 
-    const sourceUrl = "https://letsporn.com/s-" + id; 
-    
-    const refreshRequest = new Request("https://dummy.com", {
+    // Step 1: Search page for actual video URL
+    const searchUrl = "https://letsporn.com/s-" + id;
+    const searchReq = new Request("https://dummy.com", {
       method: "POST",
-      body: JSON.stringify({ url: sourceUrl }),
+      body: JSON.stringify({ url: searchUrl }),
       headers: { "Content-Type": "application/json" }
     });
     
-    const sourceRes = await fetchSourceData(refreshRequest);
+    // We need to fetch the search page to find the actual video link
+    let searchHtml = "";
+    try {
+      const sRes = await fetch(searchUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+        }
+      });
+      if (sRes.ok) searchHtml = await sRes.text();
+    } catch (e) {}
+
+    // If blocked, try Jina reader
+    if (!searchHtml || !searchHtml.includes("letsporn.com/")) {
+      try {
+        const jinaRes = await fetch("https://r.jina.ai/" + searchUrl);
+        if (jinaRes.ok) searchHtml = await jinaRes.text();
+      } catch (e) {}
+    }
+
+    // Find actual video URL from search page
+    let actualVideoUrl = "";
+    if (searchHtml) {
+      // Look for links matching letsporn.com/[something]-[id]
+      const regex = new RegExp("https:\\/\\/letsporn\\.com\\/[a-z0-9\\-]+-" + id, "i");
+      const match = searchHtml.match(regex);
+      if (match) actualVideoUrl = match[0];
+    }
+
+    if (!actualVideoUrl) {
+      return json({ error: "Could not find actual video page from search. (ID: " + id + ")" }, 400);
+    }
+
+    // Step 2: Fetch actual video page to get new .mp4 link
+    const fetchReq = new Request("https://dummy.com", {
+      method: "POST",
+      body: JSON.stringify({ url: actualVideoUrl }),
+      headers: { "Content-Type": "application/json" }
+    });
+    
+    const sourceRes = await fetchSourceData(fetchReq);
     const sourceData = await sourceRes.json();
 
     if (!sourceData.success || !sourceData.data.videoUrl) {
-      return json({ error: "Failed to find new link from site." }, 400);
+      return json({ error: "Failed to find new link from actual video page." }, 400);
     }
 
+    // Update the movie URL
     list[idx].videoUrl = sourceData.data.videoUrl;
-    if(sourceData.data.thumbnail) list[idx].thumbnail = sourceData.data.thumbnail;
+    if (sourceData.data.thumbnail) list[idx].thumbnail = sourceData.data.thumbnail;
 
     await env.MOVIES.put("movie_list", JSON.stringify(list));
 
@@ -91,15 +134,46 @@ async function refreshAllLinks(request, env) {
     for (let i = 0; i < list.length; i++) {
       try {
         const id = list[i].id;
-        const sourceUrl = "https://letsporn.com/s-" + id;
+        const searchUrl = "https://letsporn.com/s-" + id;
         
-        const refreshRequest = new Request("https://dummy.com", {
+        // Step 1: Find actual video page from search
+        let searchHtml = "";
+        try {
+          const sRes = await fetch(searchUrl, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+            }
+          });
+          if (sRes.ok) searchHtml = await sRes.text();
+        } catch (e) {}
+
+        if (!searchHtml || !searchHtml.includes("letsporn.com/")) {
+          try {
+            const jinaRes = await fetch("https://r.jina.ai/" + searchUrl);
+            if (jinaRes.ok) searchHtml = await jinaRes.text();
+          } catch (e) {}
+        }
+
+        let actualVideoUrl = "";
+        if (searchHtml) {
+          const regex = new RegExp("https:\\/\\/letsporn\\.com\\/[a-z0-9\\-]+-" + id, "i");
+          const match = searchHtml.match(regex);
+          if (match) actualVideoUrl = match[0];
+        }
+
+        if (!actualVideoUrl) {
+          failCount++;
+          continue;
+        }
+
+        // Step 2: Fetch actual video page
+        const fetchReq = new Request("https://dummy.com", {
           method: "POST",
-          body: JSON.stringify({ url: sourceUrl }),
+          body: JSON.stringify({ url: actualVideoUrl }),
           headers: { "Content-Type": "application/json" }
         });
         
-        const sourceRes = await fetchSourceData(refreshRequest);
+        const sourceRes = await fetchSourceData(fetchReq);
         const sourceData = await sourceRes.json();
 
         if (sourceData.success && sourceData.data.videoUrl) {
