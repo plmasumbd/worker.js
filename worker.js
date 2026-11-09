@@ -21,7 +21,10 @@ export default {
 
     if (p === "/api/movie" && request.method === "GET") return getSingleMovie(env, url);
     if (p === "/api/fetch-source" && request.method === "POST") return fetchSourceData(request);
-    if (p === "/api/movies/refresh-link" && request.method === "POST") return refreshMovieLink(request, env); // নতুন
+    
+    // Auto Refresh Endpoints
+    if (p === "/api/movies/refresh-link" && request.method === "POST") return refreshMovieLink(request, env);
+    if (p === "/api/movies/refresh-all" && request.method === "POST") return refreshAllLinks(request, env);
 
     if (p === "/api/movies/related" && request.method === "GET") return getRelatedMovies(env, url);
     if (p === "/api/movies/trending" && request.method === "GET") return getTrendingMovies(env);
@@ -35,6 +38,88 @@ export default {
     return new Response("404", { status: 404 });
   }
 };
+
+// ================= AUTO REFRESH LINK (Single) =================
+async function refreshMovieLink(request, env) {
+  try {
+    const body = await request.json();
+    const id = body.id;
+    if (!id) return json({ error: "ID required" }, 400);
+
+    const raw = await env.MOVIES.get("movie_list");
+    let list = raw ? JSON.parse(raw) : [];
+    const idx = list.findIndex(m => m.id === id);
+    if (idx === -1) return json({ error: "Video not found" }, 404);
+
+    const sourceUrl = "https://letsporn.com/s-" + id; 
+    
+    const refreshRequest = new Request("https://dummy.com", {
+      method: "POST",
+      body: JSON.stringify({ url: sourceUrl }),
+      headers: { "Content-Type": "application/json" }
+    });
+    
+    const sourceRes = await fetchSourceData(refreshRequest);
+    const sourceData = await sourceRes.json();
+
+    if (!sourceData.success || !sourceData.data.videoUrl) {
+      return json({ error: "Failed to find new link from site." }, 400);
+    }
+
+    list[idx].videoUrl = sourceData.data.videoUrl;
+    if(sourceData.data.thumbnail) list[idx].thumbnail = sourceData.data.thumbnail;
+
+    await env.MOVIES.put("movie_list", JSON.stringify(list));
+
+    return json({ success: true, videoUrl: sourceData.data.videoUrl, message: "Link refreshed successfully!" });
+  } catch (e) {
+    return json({ error: e.message }, 500);
+  }
+}
+
+// ================= AUTO REFRESH ALL LINKS =================
+async function refreshAllLinks(request, env) {
+  try {
+    const auth = request.headers.get("X-Admin-Password");
+    if (auth !== ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
+    
+    const raw = await env.MOVIES.get("movie_list");
+    let list = raw ? JSON.parse(raw) : [];
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < list.length; i++) {
+      try {
+        const id = list[i].id;
+        const sourceUrl = "https://letsporn.com/s-" + id;
+        
+        const refreshRequest = new Request("https://dummy.com", {
+          method: "POST",
+          body: JSON.stringify({ url: sourceUrl }),
+          headers: { "Content-Type": "application/json" }
+        });
+        
+        const sourceRes = await fetchSourceData(refreshRequest);
+        const sourceData = await sourceRes.json();
+
+        if (sourceData.success && sourceData.data.videoUrl) {
+          list[i].videoUrl = sourceData.data.videoUrl;
+          if (sourceData.data.thumbnail) list[i].thumbnail = sourceData.data.thumbnail;
+          successCount++;
+        } else {
+          failCount++;
+        }
+      } catch (e) {
+        failCount++;
+      }
+    }
+
+    await env.MOVIES.put("movie_list", JSON.stringify(list));
+    return json({ success: true, message: `Refreshed: ${successCount} success, ${failCount} failed.` });
+  } catch (e) {
+    return json({ error: e.message }, 500);
+  }
+}
 
 // ================= CHECK LINK =================
 async function checkLink(url) {
@@ -54,43 +139,6 @@ async function checkLink(url) {
     return json({ ok: res.ok, status: res.status });
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
-  }
-}
-
-// ================= REFRESH MOVIE LINK (New) =================
-async function refreshMovieLink(request, env) {
-  try {
-    const body = await request.json();
-    const id = body.id;
-    if (!id) return json({ error: "ID required" }, 400);
-
-    const raw = await env.MOVIES.get("movie_list");
-    let list = raw ? JSON.parse(raw) : [];
-    const idx = list.findIndex(m => m.id === id);
-    if (idx === -1) return json({ error: "Video not found" }, 404);
-
-    const sourceUrl = list[idx].sourceUrl;
-    if (!sourceUrl) return json({ error: "Source URL not saved for this video. Please edit and re-add with source link." }, 400);
-
-    // Fetch new link from source
-    const refreshRequest = new Request("https://dummy.com", {
-      method: "POST",
-      body: JSON.stringify({ url: sourceUrl }),
-      headers: { "Content-Type": "application/json" }
-    });
-    const sourceRes = await fetchSourceData(refreshRequest);
-    const sourceData = await sourceRes.json();
-
-    if (!sourceData.success || !sourceData.data.videoUrl) {
-      return json({ error: "Failed to fetch new link from source." }, 400);
-    }
-
-    list[idx].videoUrl = sourceData.data.videoUrl;
-    await env.MOVIES.put("movie_list", JSON.stringify(list));
-
-    return json({ success: true, videoUrl: sourceData.data.videoUrl, message: "Link refreshed successfully!" });
-  } catch (e) {
-    return json({ error: e.message }, 500);
   }
 }
 
@@ -286,7 +334,6 @@ async function addMovie(request, env) {
     id: b.videoId || crypto.randomUUID(),
     title: b.title.trim(),
     videoUrl: vurl.trim(),
-    sourceUrl: b.sourceUrl || "", // <-- নতুন ফিল্ড
     thumbnail: thumb,
     createdAt: Date.now(),
     views: Math.floor(Math.random() * 4500) + 500
@@ -318,7 +365,6 @@ async function updateMovie(request, env) {
     }
   }
   if (b.thumbnail) list[i].thumbnail = b.thumbnail.trim();
-  if (b.sourceUrl !== undefined) list[i].sourceUrl = b.sourceUrl.trim(); // <-- নতুন
   
   await env.MOVIES.put("movie_list", JSON.stringify(list));
   return json({ success: true });
@@ -975,8 +1021,6 @@ function adminPage() {
   parts.push('<input type="text" id="title">');
   parts.push('<label>Video URL / Embed</label>');
   parts.push('<textarea id="vurl"></textarea>');
-  parts.push('<label>Source Page URL (for auto-refresh)</label>');
-  parts.push('<input type="text" id="sourceUrl" placeholder="https://letsporn.com/video-title-1234">');
   parts.push('<label>Thumbnail URL (optional)</label>');
   parts.push('<input type="text" id="thumb">');
   parts.push('<input type="hidden" id="videoIdField">');
@@ -1074,7 +1118,6 @@ function adminPage() {
   parts.push(' $("eid").value="";');
   parts.push(' $("title").value="";');
   parts.push(' $("vurl").value="";');
-  parts.push(' $("sourceUrl").value="";'); // নতুন
   parts.push(' $("thumb").value="";');
   parts.push(' $("videoIdField").value="";');
   parts.push(' $("ft").textContent="Add / Edit Movie";');
@@ -1107,7 +1150,7 @@ function adminPage() {
   parts.push(' var r=await fetch("/api/fetch-source",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:url})});');
   parts.push(' var d=await r.json();');
   parts.push(' if(r.ok && d.success){');
-  parts.push(' fillForm(d.data, url);'); // url পাস করা হলো
+  parts.push(' fillForm(d.data, url);');
   parts.push(' m.textContent="Data fetched successfully!";m.className="msg ok show";');
   parts.push(' m.style.color="#b6ffb6";');
   parts.push(' }else{');
@@ -1148,7 +1191,6 @@ function adminPage() {
   parts.push(' $("vurl").value = data.videoUrl || "";');
   parts.push(' $("thumb").value = data.thumbnail || "";');
   parts.push(' $("videoIdField").value = data.id || "";');
-  parts.push(' if(sourceUrl) $("sourceUrl").value = sourceUrl;'); // সোর্স URL সেভ
   parts.push('}');
 
   parts.push('async function saveMovie(){');
@@ -1157,11 +1199,10 @@ function adminPage() {
   parts.push(' var vurl=$("vurl").value.trim();');
   parts.push(' var thumb=$("thumb").value.trim();');
   parts.push(' var vid=$("videoIdField").value.trim();');
-  parts.push(' var sourceUrl=$("sourceUrl").value.trim();'); // নতুন
   parts.push(' var m=$("am");');
   parts.push(' if(!title||!vurl){m.textContent="Title and URL required";m.className="msg err show";return}');
   parts.push(' var u=eid?"/api/movies/update":"/api/movies";');
-  parts.push(' var p={title:title,videoUrl:vurl,thumbnail:thumb, sourceUrl:sourceUrl};');
+  parts.push(' var p={title:title,videoUrl:vurl,thumbnail:thumb};');
   parts.push(' if(eid)p.id=eid;');
   parts.push(' if(!eid && vid) p.videoId = vid;');
   parts.push(' try{');
@@ -1219,7 +1260,6 @@ function adminPage() {
 
   // ==== Auto Refresh Button in Admin ====
   parts.push('async function refreshLink(m, itemEl){');
-  parts.push(' if(!m.sourceUrl){ alert("No Source URL saved for this video. Please edit and add one."); return; }');
   parts.push(' var btn = itemEl.querySelector(".refresh-btn");');
   parts.push(' if(btn){ btn.textContent="Refreshing..."; btn.disabled=true; }');
   parts.push(' try{');
@@ -1227,13 +1267,12 @@ function adminPage() {
   parts.push(' var d = await r.json();');
   parts.push(' if(r.ok && d.success){');
   parts.push(' m.videoUrl = d.videoUrl;');
-  parts.push(' alert("Link Refreshed Successfully!");');
   parts.push(' loadList();');
   parts.push(' } else {');
   parts.push(' alert(d.error || "Failed to refresh link");');
   parts.push(' }');
   parts.push(' }catch(e){ alert("Error: "+e.message); }');
-  parts.push(' if(btn){ btn.textContent="🔄 Refresh Link"; btn.disabled=false; }');
+  parts.push(' if(btn){ btn.textContent="🔄 Refresh"; btn.disabled=false; }');
   parts.push('}');
 
   parts.push('async function checkAllLinks(all, btn){');
@@ -1256,6 +1295,26 @@ function adminPage() {
   parts.push(' loadList();');
   parts.push('}');
 
+  // ==== Refresh All Links ====
+  parts.push('async function refreshAllLinks(btn){');
+  parts.push(' if(!confirm("Are you sure you want to refresh ALL video links? This may take some time.")) return;');
+  parts.push(' btn.disabled = true;');
+  parts.push(' var originalText = btn.textContent;');
+  parts.push(' btn.textContent = "⏳ Refreshing All...";');
+  parts.push(' try{');
+  parts.push(' var r = await fetch("/api/movies/refresh-all", {method:"POST", headers:{"Content-Type":"application/json","X-Admin-Password":token}, body: JSON.stringify({})});');
+  parts.push(' var d = await r.json();');
+  parts.push(' if(r.ok && d.success){');
+  parts.push(' alert(d.message);');
+  parts.push(' loadList();');
+  parts.push(' } else {');
+  parts.push(' alert(d.error || "Failed to refresh all links");');
+  parts.push(' }');
+  parts.push(' }catch(e){ alert("Error: "+e.message); }');
+  parts.push(' btn.disabled = false;');
+  parts.push(' btn.textContent = originalText;');
+  parts.push('}');
+
   parts.push('async function loadList(){');
   parts.push(' var p=1,all=[];');
   parts.push(' while(true){');
@@ -1272,13 +1331,27 @@ function adminPage() {
   parts.push(' var hdr=document.createElement("div");');
   parts.push(' hdr.style.cssText="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px";');
   parts.push(' hdr.innerHTML=\'<div style="font-size:14px;color:#888">Total: \'+all.length+\' videos</div>\';');
+  
+  parts.push(' var btnGroup=document.createElement("div");');
+  parts.push(' btnGroup.style.cssText="display:flex;gap:8px;flex-wrap:wrap";');
+
   parts.push(' var chkBtn=document.createElement("button");');
   parts.push(' chkBtn.className="primary small";');
   parts.push(' chkBtn.style.background="#2196F3";');
   parts.push(' chkBtn.style.marginTop="0";');
   parts.push(' chkBtn.textContent="🔍 Check All Links";');
   parts.push(' chkBtn.onclick=function(){ checkAllLinks(all, chkBtn); };');
-  parts.push(' hdr.appendChild(chkBtn);');
+
+  parts.push(' var refAllBtn=document.createElement("button");');
+  parts.push(' refAllBtn.className="primary small";');
+  parts.push(' refAllBtn.style.background="#ff9800";');
+  parts.push(' refAllBtn.style.marginTop="0";');
+  parts.push(' refAllBtn.textContent="🔄 Refresh All Links";');
+  parts.push(' refAllBtn.onclick=function(){ refreshAllLinks(refAllBtn); };');
+
+  parts.push(' btnGroup.appendChild(refAllBtn);');
+  parts.push(' btnGroup.appendChild(chkBtn);');
+  parts.push(' hdr.appendChild(btnGroup);');
   parts.push(' el.appendChild(hdr);');
 
   parts.push(' all.forEach(function(m){');
@@ -1289,30 +1362,34 @@ function adminPage() {
   parts.push(' d.innerHTML=\'<div class="info"><div class="mini" style="\'+s+\'"></div><div><h4>\'+esc(m.title)+\' \'+statusBadge+\'</h4><div class="stats">👁 \'+fmtViews(m.views||0)+\' views</div></div></div>\';');
   parts.push(' var acts=document.createElement("div");');
   parts.push(' acts.className="acts";');
+  
+  parts.push(' var ref=document.createElement("button");');
+  parts.push(' ref.className="primary small refresh-btn";');
+  parts.push(' ref.style.background="#ff9800";');
+  parts.push(' ref.style.marginTop="0";');
+  parts.push(' ref.textContent="🔄 Refresh";');
+  parts.push(' ref.onclick=function(){ refreshLink(m, d); };');
+
   parts.push(' var chk=document.createElement("button");');
   parts.push(' chk.className="primary small";');
   parts.push(' chk.style.background="#2196F3";');
   parts.push(' chk.style.marginTop="0";');
   parts.push(' chk.textContent="Test";');
   parts.push(' chk.onclick=function(){ testLink(m, d); };');
-  // New Refresh Button
-  parts.push(' var ref=document.createElement("button");');
-  parts.push(' ref.className="primary small refresh-btn";');
-  parts.push(' ref.style.background="#ff9800";');
-  parts.push(' ref.style.marginTop="0";');
-  parts.push(' ref.textContent="🔄 Refresh Link";');
-  parts.push(' ref.onclick=function(){ refreshLink(m, d); };');
+
   parts.push(' var eb=document.createElement("button");');
   parts.push(' eb.className="primary small";');
   parts.push(' eb.style.marginTop="0";');
   parts.push(' eb.textContent="Edit";');
   parts.push(' eb.onclick=function(){editMovie(m.id)};');
+
   parts.push(' var db=document.createElement("button");');
   parts.push(' db.className="primary small danger";');
   parts.push(' db.style.marginTop="0";');
   parts.push(' db.textContent="Delete";');
   parts.push(' db.onclick=function(){delMovie(m.id)};');
-  parts.push(' acts.appendChild(ref);'); // add refresh
+
+  parts.push(' acts.appendChild(ref);');
   parts.push(' acts.appendChild(chk);');
   parts.push(' acts.appendChild(eb);');
   parts.push(' acts.appendChild(db);');
@@ -1335,7 +1412,6 @@ function adminPage() {
   parts.push(' $("eid").value=m.id;');
   parts.push(' $("title").value=m.title;');
   parts.push(' $("vurl").value=m.videoUrl;');
-  parts.push(' $("sourceUrl").value=m.sourceUrl||"";'); // নতুন
   parts.push(' $("thumb").value=m.thumbnail||"";');
   parts.push(' $("videoIdField").value="";');
   parts.push(' $("ft").textContent="Edit Movie";');
