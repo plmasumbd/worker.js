@@ -9,6 +9,7 @@ export default {
     if (p === "/api/movies" && request.method === "GET") return listMovies(env, url);
     if (p === "/api/movies" && request.method === "POST") return addMovie(request, env);
     if (p === "/api/movies/update" && request.method === "POST") return updateMovie(request, env);
+    if (p === "/api/movies/update-content" && request.method === "POST") return updateContent(request, env);
     if (p.startsWith("/api/movies/") && request.method === "DELETE") return deleteMovie(request, env, p);
     if (p === "/api/login" && request.method === "POST") return login(request);
     if (p === "/api/check-auth" && request.method === "GET") return checkAuth(request);
@@ -24,8 +25,6 @@ export default {
     if (p === "/api/movies/trending" && request.method === "GET") return getTrendingMovies(env);
     if (p === "/api/movies/track-view" && request.method === "POST") return trackView(request, env);
     if (p === "/api/check-link" && request.method === "GET") return checkLink(url);
-
-    // 🔍 DEBUG — embed পেজে আসলে কী আছে দেখার জন্য
     if (p === "/api/debug-embed" && request.method === "GET") return debugEmbed(url);
 
     if (p === "/") return html(homePage());
@@ -36,56 +35,59 @@ export default {
   }
 };
 
-// ================= DEBUG EMBED =================
+// ================= DEBUG =================
 async function debugEmbed(url) {
   const embedUrl = url.searchParams.get("url");
   if (!embedUrl) return json({ error: "url param দরকার" }, 400);
-
   const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://expmle.com/"
   };
-
   const result = { embedUrl, attempts: [] };
-
   try {
     const res = await fetch(embedUrl, { headers, redirect: "follow" });
     const text = await res.text();
     result.attempts.push({
-      method: "direct",
-      status: res.status,
-      length: text.length,
+      method: "direct", status: res.status, length: text.length,
       hasSetVideoUrlHigh: /setVideoUrlHigh/i.test(text),
       hasSetVideoUrl: /setVideoUrl/i.test(text),
       hasContentUrl: /contentUrl/i.test(text),
       hasSecure: /secure=/i.test(text),
-      hasEmbedframe: /embedframe/i.test(text),
       preview: text.slice(0, 1500)
     });
-  } catch (e) {
-    result.attempts.push({ method: "direct", error: e.message });
-  }
-
+  } catch (e) { result.attempts.push({ method: "direct", error: e.message }); }
   try {
     const j = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain" } });
     const text = await j.text();
     result.attempts.push({
-      method: "jina",
-      status: j.status,
-      length: text.length,
+      method: "jina", status: j.status, length: text.length,
       hasSetVideoUrlHigh: /setVideoUrlHigh/i.test(text),
       hasSetVideoUrl: /setVideoUrl/i.test(text),
       hasContentUrl: /contentUrl/i.test(text),
       hasSecure: /secure=/i.test(text),
       preview: text.slice(0, 1500)
     });
-  } catch (e) {
-    result.attempts.push({ method: "jina", error: e.message });
-  }
-
+  } catch (e) { result.attempts.push({ method: "jina", error: e.message }); }
   return json(result);
+}
+
+// ================= UPDATE CONTENT (public, from watch page) =================
+async function updateContent(request, env) {
+  try {
+    const b = await request.json();
+    if (!b.id || !b.contentUrl) return json({ error: "id & contentUrl required" }, 400);
+    const raw = await env.MOVIES.get("movie_list");
+    const list = raw ? JSON.parse(raw) : [];
+    const idx = list.findIndex(m => m.id === b.id);
+    if (idx === -1) return json({ error: "Not found" }, 404);
+    list[idx].contentUrl = b.contentUrl;
+    list[idx].videoUrl = b.contentUrl;
+    list[idx].lastRefresh = Date.now();
+    await env.MOVIES.put("movie_list", JSON.stringify(list));
+    return json({ success: true });
+  } catch (e) { return json({ error: e.message }, 500); }
 }
 
 // ================= REFRESH SINGLE =================
@@ -115,7 +117,7 @@ async function refreshMovie(request, env) {
   } catch (e) { return json({ error: e.message }, 500); }
 }
 
-// ================= REFRESH ALL =================
+// ================= REFRESH ALL (2-3s delay) =================
 async function refreshAll(request, env) {
   const auth = request.headers.get("X-Admin-Password");
   if (auth !== ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
@@ -123,49 +125,63 @@ async function refreshAll(request, env) {
   const list = raw ? JSON.parse(raw) : [];
   let ok = 0, fail = 0;
   const failures = [];
-  for (const movie of list) {
+  for (let i = 0; i < list.length; i++) {
+    const movie = list[i];
     const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
-    if (!embedUrl) { fail++; failures.push({ id: movie.id, title: movie.title, reason: "no embedUrl" }); continue; }
-    try {
-      const fresh = await fetchFreshFromEmbed(embedUrl);
-      if (fresh.contentUrl) {
-        movie.contentUrl = fresh.contentUrl;
-        movie.videoUrl = fresh.contentUrl;
-        if (fresh.title) movie.title = fresh.title;
-        if (fresh.thumbnail) movie.thumbnail = fresh.thumbnail;
-        if (fresh.views) movie.views = fresh.views;
-        movie.lastRefresh = Date.now();
-        ok++;
-      } else { fail++; failures.push({ id: movie.id, title: movie.title, reason: "no contentUrl" }); }
-    } catch (e) { fail++; failures.push({ id: movie.id, title: movie.title, reason: e.message }); }
-    await new Promise(r => setTimeout(r, 300));
+    if (!embedUrl) {
+      fail++; failures.push({ id: movie.id, title: movie.title, reason: "no embedUrl" });
+    } else {
+      try {
+        const fresh = await fetchFreshFromEmbed(embedUrl);
+        if (fresh.contentUrl) {
+          movie.contentUrl = fresh.contentUrl;
+          movie.videoUrl = fresh.contentUrl;
+          if (fresh.title) movie.title = fresh.title;
+          if (fresh.thumbnail) movie.thumbnail = fresh.thumbnail;
+          if (fresh.views) movie.views = fresh.views;
+          movie.lastRefresh = Date.now();
+          ok++;
+        } else { fail++; failures.push({ id: movie.id, title: movie.title, reason: "no contentUrl" }); }
+      } catch (e) { fail++; failures.push({ id: movie.id, title: movie.title, reason: e.message }); }
+    }
+    if (i < list.length - 1) {
+      const wait = 2000 + Math.floor(Math.random() * 1000);
+      await new Promise(r => setTimeout(r, wait));
+    }
+    if ((i + 1) % 5 === 0 || i === list.length - 1) {
+      await env.MOVIES.put("movie_list", JSON.stringify(list));
+    }
   }
-  await env.MOVIES.put("movie_list", JSON.stringify(list));
   return json({ success: true, ok, fail, failures });
 }
 
-// ================= SCRAPE EMBED =================
+// ================= SCRAPE EMBED (JINA-FIRST) =================
 async function fetchFreshFromEmbed(embedUrl) {
-  const headers = {
+  const directHeaders = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://expmle.com/"
   };
+  const out = { contentUrl: "", title: "", thumbnail: "", views: 0, source: "" };
   let text = "";
   try {
-    const res = await fetch(embedUrl, { headers, redirect: "follow" });
-    if (res.ok) text = await res.text();
+    const j = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "text" } });
+    if (j.ok) {
+      const t = await j.text();
+      if (/setVideoUrl|contentUrl|secure=/i.test(t)) { text = t; out.source = "jina"; }
+    }
   } catch (e) {}
-  if (!text || (!/setVideoUrl/i.test(text) && !/contentUrl/i.test(text) && !/secure=/i.test(text))) {
+  if (!text) {
     try {
-      const j = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain" } });
-      if (j.ok) text = await j.text();
+      const res = await fetch(embedUrl, { headers: directHeaders, redirect: "follow" });
+      if (res.ok) {
+        const t = await res.text();
+        if (!/RateLimitTriggeredError/i.test(t) || t.length > 2000) { text = t; out.source = "direct"; }
+      }
     } catch (e) {}
   }
-  const out = { contentUrl: "", title: "", thumbnail: "", views: 0 };
   if (!text) return out;
-
   let m = text.match(/setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]/i);
   if (m) out.contentUrl = m[1];
   if (!out.contentUrl) { m = text.match(/setVideoUrl(?:Low)?\s*\(\s*['"]([^'"]+)['"]/i); if (m) out.contentUrl = m[1]; }
@@ -173,7 +189,6 @@ async function fetchFreshFromEmbed(embedUrl) {
   if (!out.contentUrl) { m = text.match(/['"](https?:\/\/[^'"]+\.mp4\?secure=[^'"]+)['"]/i); if (m) out.contentUrl = m[1]; }
   if (!out.contentUrl) { m = text.match(/['"](https?:\/\/[^'"\s]+secure=[^'"\s]+)['"]/i); if (m) out.contentUrl = m[1]; }
   if (out.contentUrl) out.contentUrl = out.contentUrl.replace(/&amp;/g, "&").replace(/\\\//g, "/");
-
   m = text.match(/"name"\s*:\s*"([^"]+)"/i); if (m) out.title = m[1];
   m = text.match(/"thumbnailUrl"\s*:\s*\[\s*"([^"]+)"/i) || text.match(/"thumbnailUrl"\s*:\s*"([^"]+)"/i);
   if (m) out.thumbnail = m[1].replace(/&amp;/g, "&");
@@ -200,31 +215,35 @@ async function fetchSourceData(request) {
     if (!targetUrl) return json({ error: "URL required" }, 400);
     let htmlText = "";
     try {
-      const res = await fetch(targetUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "Accept-Language": "en-US,en;q=0.9",
-          "Referer": "https://expmle.com/"
-        }
-      });
-      if (res.ok) htmlText = await res.text();
+      const j = await fetch("https://r.jina.ai/" + targetUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "text" } });
+      if (j.ok) {
+        const t = await j.text();
+        if (/setVideoUrl|contentUrl|secure=/i.test(t)) htmlText = t;
+      }
     } catch (e) {}
-    if (!htmlText || (!/setVideoUrl/i.test(htmlText) && !/contentUrl/i.test(htmlText) && !/secure=/i.test(htmlText))) {
+    if (!htmlText) {
       try {
-        const jinaRes = await fetch("https://r.jina.ai/" + targetUrl, { headers: { "Accept": "text/plain" } });
-        if (jinaRes.ok) htmlText = await jinaRes.text();
+        const res = await fetch(targetUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://expmle.com/"
+          }
+        });
+        if (res.ok) {
+          const t = await res.text();
+          if (!/RateLimitTriggeredError/i.test(t) || t.length > 2000) htmlText = t;
+        }
       } catch (e) {}
     }
-    if (!htmlText) return json({ error: "পেজ লোড হয়নি" }, 400);
-
+    if (!htmlText) return json({ error: "পেজ লোড হয়নি — rate limit বা ব্লক। View Source পেস্ট করুন।" }, 400);
     const getJson = (key) => {
       let m = htmlText.match(new RegExp('"' + key + '"\\s*:\\s*"([^"]+)"', "i"));
       if (m) return m[1];
       m = htmlText.match(new RegExp(key + "\\s*:\\s*['\"]([^'\"]+)['\"]", "i"));
       return m ? m[1] : "";
     };
-
     let contentUrl = "";
     let m = htmlText.match(/setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]/i); if (m) contentUrl = m[1];
     if (!contentUrl) { m = htmlText.match(/setVideoUrl(?:Low)?\s*\(\s*['"]([^'"]+)['"]/i); if (m) contentUrl = m[1]; }
@@ -232,23 +251,19 @@ async function fetchSourceData(request) {
     if (!contentUrl) { m = htmlText.match(/['"](https?:\/\/[^'"]+\.mp4\?secure=[^'"]+)['"]/i); if (m) contentUrl = m[1]; }
     if (!contentUrl) { m = htmlText.match(/['"](https?:\/\/[^'"\s]+secure=[^'"\s]+)['"]/i); if (m) contentUrl = m[1]; }
     if (contentUrl) contentUrl = contentUrl.replace(/&amp;/g, "&").replace(/\\\//g, "/");
-
     let title = "";
     m = htmlText.match(/<meta[^>]*name\s*=\s*["']description["'][^>]*content\s*=\s*["']([^"']+)["']/i);
     if (!m) m = htmlText.match(/<meta[^>]*content\s*=\s*["']([^"']+)["'][^>]*name\s*=\s*["']description["']/i);
     if (m) title = m[1].trim();
     if (!title) title = getJson("name");
-
     let thumbnail = "";
     const tArr = htmlText.match(/"thumbnailUrl"\s*:\s*\[\s*"([^"]+)"/i);
     if (tArr) thumbnail = tArr[1];
     if (!thumbnail) thumbnail = getJson("thumbnailUrl");
     if (thumbnail) thumbnail = thumbnail.replace(/&amp;/g, "&");
-
     let views = 0;
     const vm = htmlText.match(/"userInteractionCount"\s*:\s*"?(\d+)"?/i);
     if (vm) views = parseInt(vm[1], 10) || 0;
-
     let embedUrl = "";
     const iframes = htmlText.match(/<iframe[\s\S]*?>/gi) || [];
     for (let i = 0; i < iframes.length; i++) {
@@ -259,12 +274,9 @@ async function fetchSourceData(request) {
     }
     if (!embedUrl) { const d = htmlText.match(/https?:\/\/[^"'\s<>]*embedframe\/[a-zA-Z0-9]+/i); if (d) embedUrl = d[0]; }
     if (embedUrl) embedUrl = embedUrl.replace(/&amp;/g, "&");
-
     let videoId = "";
     if (embedUrl) { const em = embedUrl.match(/embedframe\/([a-zA-Z0-9]+)/); if (em) videoId = em[1]; }
-
     if (!contentUrl && !embedUrl) return json({ error: "contentUrl বা embed iframe পাওয়া যায়নি" }, 400);
-
     return json({ success: true, data: { title, id: videoId, thumbnail, contentUrl, embedUrl, views, videoUrl: contentUrl || embedUrl } });
   } catch (err) { return json({ error: "Scraping failed: " + err.message }, 500); }
 }
@@ -530,11 +542,11 @@ function watchPage(id) {
   p.push('.wrap{max-width:1000px;margin:24px auto;padding:0 16px}');
   p.push('.player-wrap{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center;max-width:860px;margin:0 auto}');
   p.push('.player{width:100%;height:100%;position:relative}');
-  p.push('.player video,.player iframe{width:100%;height:100%;border:0;display:block;object-fit:contain}');
+  p.push('.player video{width:100%;height:100%;border:0;display:block;object-fit:contain}');
   p.push('.loader-box{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#000;z-index:10}');
   p.push('.spinner{width:50px;height:50px;border:5px solid rgba(255,0,64,.2);border-top-color:#ff0040;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:15px}');
   p.push('@keyframes spin{to{transform:rotate(360deg)}}');
-  p.push('.loader-text{color:#ff0040;font-size:14px;font-weight:bold;letter-spacing:1px}');
+  p.push('.loader-text{color:#ff0040;font-size:14px;font-weight:bold;letter-spacing:1px;text-align:center;padding:0 20px}');
   p.push('.title{margin-top:18px;font-size:20px;font-weight:700;line-height:1.4}');
   p.push('.meta{margin-top:10px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;color:#aaa;font-size:14px}');
   p.push('.meta .views{color:#ff9800;font-weight:600}');
@@ -573,9 +585,9 @@ function watchPage(id) {
   p.push('<header><a href="/" class="logo">AdultMovie</a><a href="/" class="back-btn">← Home</a></header>');
   p.push('<div class="wrap">');
   p.push('<div class="player-wrap" id="playerWrap">');
-  p.push('  <div class="loader-box" id="loadingBox"><div class="spinner"></div><div class="loader-text">Loading Video...</div></div>');
+  p.push('  <div class="loader-box" id="loadingBox"><div class="spinner"></div><div class="loader-text" id="loaderText">Loading Video...</div></div>');
   p.push('  <div class="player" id="pb" style="display:none;"></div>');
-  p.push('  <div class="video-error" id="videoError"><h3>⚠️ Video Not Loading</h3><p>This video might be unavailable or expired. Ask admin to refresh.</p><button onclick="location.reload()">🔄 Reload Page</button></div>');
+  p.push('  <div class="video-error" id="videoError"><h3>⚠️ Video Not Loading</h3><p>This video might be expired. Try reloading, or pick another video below.</p><button onclick="location.reload()">🔄 Reload Page</button></div>');
   p.push('</div>');
   p.push('<div class="title" id="t">Loading...</div>');
   p.push('<div class="meta" id="metaBar"></div>');
@@ -599,6 +611,24 @@ function watchPage(id) {
   p.push('function toggleFav(id){var a=getFavs();var s=String(id);var i=a.indexOf(s);if(i===-1)a.push(s);else a.splice(i,1);localStorage.setItem("fav_ids",JSON.stringify(a));return i===-1}');
   p.push('var id=new URLSearchParams(location.search).get("id");');
   p.push('var movieData=null,relatedList=[];');
+  p.push('async function fetchContentFromBrowser(embedUrl){');
+  p.push('  try{');
+  p.push('    var r = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "text" } });');
+  p.push('    if(!r.ok) return null;');
+  p.push('    var t = await r.text();');
+  p.push('    return extractContentUrl(t);');
+  p.push('  } catch(e){ return null; }');
+  p.push('}');
+  p.push('function extractContentUrl(text){');
+  p.push('  if(!text) return null;');
+  p.push('  var m = text.match(/setVideoUrlHigh\\s*\\(\\s*[\'"]([^\'"]+)[\'"]/i);');
+  p.push('  if(!m) m = text.match(/setVideoUrl(?:Low)?\\s*\\(\\s*[\'"]([^\'"]+)[\'"]/i);');
+  p.push('  if(!m) m = text.match(/"contentUrl"\\s*:\\s*"([^"]+)"/i);');
+  p.push('  if(!m) m = text.match(/[\'"](https?:\\/\\/[^\'"]+\\.mp4\\?secure=[^\'"]+)[\'"]/i);');
+  p.push('  if(!m) m = text.match(/[\'"](https?:\\/\\/[^\'"\\s]+secure=[^\'"\\s]+)[\'"]/i);');
+  p.push('  if(!m) return null;');
+  p.push('  return m[1].replace(/&amp;/g,"&").replace(/\\\\\\//g,"/");');
+  p.push('}');
   p.push('async function loadData(){if(!id){$("t").textContent="No ID";return}try{var r=await fetch("/api/movie?id="+id);if(!r.ok)throw new Error("Not found");var d=await r.json();movieData=d.movie;document.title=movieData.title;$("t").textContent=movieData.title;renderMeta();renderActions();markWatched(movieData.id);playVideo();loadRelated();loadTrending()}catch(e){$("t").textContent="Video Not Found";$("loadingBox").style.display="none";$("videoError").classList.add("show")}}');
   p.push('function trackView(){if(!movieData)return;fetch("/api/movies/track-view",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:movieData.id})}).then(function(r){return r.json()}).then(function(d){if(d.success&&d.views){movieData.views=d.views;renderMeta()}}).catch(function(){})}');
   p.push('function renderMeta(){if(!movieData)return;var v=movieData.views||0;$("metaBar").innerHTML=\'<span class="views">👁️ \'+fmt(v)+\' views</span>\'}');
@@ -607,13 +637,29 @@ function watchPage(id) {
   p.push('function copyLink(){navigator.clipboard.writeText(location.href).then(function(){alert("Link copied!")}).catch(function(){prompt("Copy:",location.href)})}');
   p.push('async function loadRelated(){if(!id)return;try{var r=await fetch("/api/movies/related?id="+id);var d=await r.json();relatedList=d.items||[];var g=$("relatedGrid");g.innerHTML="";if(!relatedList.length){g.innerHTML=\'<p style="color:#666">No related</p>\';return}relatedList.forEach(function(m){var a=document.createElement("a");a.className="rcard";a.href="/watch?id="+m.id;var s=m.thumbnail?"background-image:url(\'"+m.thumbnail+"\')":"";var v=m.views||0;a.innerHTML=\'<div class="rthumb" style="\'+s+\'"></div><div class="rinfo"><h4>\'+esc(m.title)+\'</h4><div class="rviews">👁 \'+fmt(v)+\'</div></div>\';g.appendChild(a)})}catch(e){}}');
   p.push('async function loadTrending(){try{var r=await fetch("/api/movies/trending");var d=await r.json();var g=$("trendingList");g.innerHTML="";if(!d.items)return;d.items.forEach(function(m,i){var a=document.createElement("a");a.className="tcard";a.href="/watch?id="+m.id;var s=m.thumbnail?"background-image:url(\'"+m.thumbnail+"\')":"";var v=m.views||0;a.innerHTML=\'<div class="tthumb" style="\'+s+\'"><div class="tnum">#\'+(i+1)+\'</div></div><div class="tinfo"><h4>\'+esc(m.title)+\'</h4><div class="tviews">👁 \'+fmt(v)+\' views</div></div>\';g.appendChild(a)})}catch(e){}}');
-  p.push('function playVideo(){');
+  p.push('async function playVideo(){');
   p.push('  if(!movieData)return;');
-  p.push('  var pb=$("pb");pb.style.display="block";pb.innerHTML="";');
+  p.push('  $("pb").style.display="block";');
   p.push('  $("videoError").classList.remove("show");');
   p.push('  $("loadingBox").style.display="flex";');
-  p.push('  var url=movieData.contentUrl||movieData.videoUrl||movieData.embedUrl||"";');
-  p.push('  if(!url){showVideoError();return}');
+  p.push('  var embedUrl = movieData.embedUrl || "";');
+  p.push('  var contentUrl = movieData.contentUrl || "";');
+  p.push('  if(contentUrl){$("loaderText").textContent="Loading video...";playContent(contentUrl);return;}');
+  p.push('  if(embedUrl){');
+  p.push('    $("loaderText").textContent="Preparing video (first time may take a moment)...";');
+  p.push('    var fresh = await fetchContentFromBrowser(embedUrl);');
+  p.push('    if(fresh){movieData.contentUrl = fresh;playContent(fresh);try{fetch("/api/movies/update-content",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:movieData.id,contentUrl:fresh})})}catch(e){}return;}');
+  p.push('  }');
+  p.push('  $("loaderText").textContent="Trying backup...";');
+  p.push('  try{');
+  p.push('    var r=await fetch("/api/refresh-movie",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:movieData.id})});');
+  p.push('    var d=await r.json();');
+  p.push('    if(r.ok && d.movie && d.movie.contentUrl){movieData.contentUrl = d.movie.contentUrl;playContent(d.movie.contentUrl);return;}');
+  p.push('  }catch(e){}');
+  p.push('  showVideoError();');
+  p.push('}');
+  p.push('function playContent(url){');
+  p.push('  var pb=$("pb");');
   p.push('  var isDirect=/\\.(mp4|webm|ogg|m3u8)(\\?|$)/i.test(url)||/secure=/.test(url);');
   p.push('  if(isDirect){');
   p.push('    var v=document.createElement("video");');
@@ -621,16 +667,9 @@ function watchPage(id) {
   p.push('    v.style.width="100%";v.style.height="100%";v.style.objectFit="contain";v.style.background="#000";');
   p.push('    v.onloadeddata=function(){$("loadingBox").style.display="none"};');
   p.push('    v.onerror=function(){showVideoError()};');
-  p.push('    setTimeout(function(){if($("loadingBox").style.display!=="none")showVideoError()},12000);');
-  p.push('    pb.appendChild(v);');
-  p.push('  }else{');
-  p.push('    var f=document.createElement("iframe");');
-  p.push('    f.src=url;f.allow="autoplay; encrypted-media; picture-in-picture; fullscreen";f.allowFullscreen=true;');
-  p.push('    f.setAttribute("webkitallowfullscreen","true");f.setAttribute("mozallowfullscreen","true");f.referrerPolicy="no-referrer";');
-  p.push('    f.onload=function(){setTimeout(function(){$("loadingBox").style.display="none"},1000)};');
-  p.push('    setTimeout(function(){if($("loadingBox").style.display!=="none")showVideoError()},8000);');
-  p.push('    pb.appendChild(f);');
-  p.push('  }');
+  p.push('    setTimeout(function(){if($("loadingBox").style.display!=="none")showVideoError()},15000);');
+  p.push('    pb.innerHTML="";pb.appendChild(v);');
+  p.push('  } else { showVideoError(); return; }');
   p.push('  trackView();');
   p.push('  var a=localStorage.getItem("admin_token");');
   p.push('  if(!a){try{fetch("/api/ads").then(function(r){return r.json()}).then(function(ad){if(ad.code&&ad.code.trim())injectAds("adBox",ad.code)})}catch(e){}}');
@@ -789,7 +828,7 @@ function adminPage() {
   p.push('  }catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}');
   p.push('}');
   p.push('async function refreshOne(id,btn){btn.disabled=true;var old=btn.textContent;btn.textContent="⏳";try{var r=await fetch("/api/refresh-movie",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({id:id})});var d=await r.json();if(r.ok){btn.textContent="✓"}else{btn.textContent="✗";alert(d.error||"Failed")}}catch(e){btn.textContent="✗";alert(e.message)}setTimeout(function(){btn.textContent=old;btn.disabled=false},1500)}');
-  p.push('async function refreshAllBtn(){if(!confirm("সব ভিডিওর contentUrl refresh করবে?"))return;var b=$("refreshAllTop");if(b){b.disabled=true;b.textContent="⏳ Refreshing..."}try{var r=await fetch("/api/refresh-all",{method:"POST",headers:{"X-Admin-Password":token}});var d=await r.json();if(r.ok){var msg="OK: "+d.ok+"  Fail: "+d.fail;if(d.failures&&d.failures.length){msg+="\\n\\nপ্রথম ১০টা ব্যর্থ:\\n"+d.failures.slice(0,10).map(function(f){return "• "+f.title+": "+f.reason}).join("\\n")}alert(msg)}else{alert(d.error||"Failed")}}catch(e){alert(e.message)}if(b){b.disabled=false;b.textContent="🔄 Refresh All"}loadList()}');
+  p.push('async function refreshAllBtn(){if(!confirm("সব ভিডিওর contentUrl refresh করবে? (২-৩ সেকেন্ড পর পর — সময় লাগবে)"))return;var b=$("refreshAllTop");if(b){b.disabled=true;b.textContent="⏳ Refreshing..."}try{var r=await fetch("/api/refresh-all",{method:"POST",headers:{"X-Admin-Password":token}});var d=await r.json();if(r.ok){var msg="OK: "+d.ok+"  Fail: "+d.fail;if(d.failures&&d.failures.length){msg+="\\n\\nপ্রথম ১০টা ব্যর্থ:\\n"+d.failures.slice(0,10).map(function(f){return "• "+f.title+": "+f.reason}).join("\\n")}alert(msg)}else{alert(d.error||"Failed")}}catch(e){alert(e.message)}if(b){b.disabled=false;b.textContent="🔄 Refresh All"}loadList()}');
   p.push('async function loadList(){var pg=1,all=[];while(true){var r=await fetch("/api/movies?page="+pg+"&noshuffle=1");var d=await r.json();all=all.concat(d.items);if(pg>=d.totalPages)break;pg++}var el=$("list");if(!all.length){el.innerHTML=\'<p style="color:#666">No movies</p>\';return}el.innerHTML="";var hdr=document.createElement("div");hdr.style.cssText="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px";hdr.innerHTML=\'<div style="font-size:14px;color:#888">Total: \'+all.length+\'</div>\';var refAll=document.createElement("button");refAll.id="refreshAllTop";refAll.className="primary small";refAll.style.background="#ff9800";refAll.style.marginTop="0";refAll.textContent="🔄 Refresh All";refAll.onclick=refreshAllBtn;hdr.appendChild(refAll);el.appendChild(hdr);all.forEach(function(mv){var s=mv.thumbnail?"background-image:url(\'"+mv.thumbnail+"\')":"";var row=document.createElement("div");row.className="item";var hasC=mv.contentUrl?"✅":"⚠️";var info=document.createElement("div");info.className="info";info.innerHTML=\'<div class="mini" style="\'+s+\'"></div><div><h4>\'+esc(mv.title)+\' \'+hasC+\'</h4><div class="stats">👁 \'+fmt(mv.views||0)+\' • embed: \'+(mv.embedUrl?"✓":"✗")+\'</div></div>\';var acts=document.createElement("div");acts.className="acts";var rb=document.createElement("button");rb.className="primary small";rb.style.background="#ff9800";rb.style.marginTop="0";rb.textContent="🔄 Refresh";rb.onclick=function(){refreshOne(mv.id,rb)};var eb=document.createElement("button");eb.className="primary small";eb.style.marginTop="0";eb.textContent="Edit";eb.onclick=function(){editMovie(mv.id)};var db=document.createElement("button");db.className="primary small danger";db.style.marginTop="0";db.textContent="Delete";db.onclick=function(){delMovie(mv.id)};acts.appendChild(rb);acts.appendChild(eb);acts.appendChild(db);row.appendChild(info);row.appendChild(acts);el.appendChild(row)})}');
   p.push('async function editMovie(id){var pg=1,all=[];while(true){var r=await fetch("/api/movies?page="+pg+"&noshuffle=1");var d=await r.json();all=all.concat(d.items);if(pg>=d.totalPages)break;pg++}var mv=all.find(function(x){return x.id===id});if(!mv)return;$("eid").value=mv.id;$("title").value=mv.title;$("embedUrl").value=mv.embedUrl||"";$("contentUrl").value=mv.contentUrl||"";$("thumb").value=mv.thumbnail||"";$("vurl").value=mv.videoUrl||"";$("videoIdField").value="";$("ft").textContent="Edit Movie";$("sb").textContent="Update";$("cb").classList.remove("hidden");window.scrollTo({top:0,behavior:"smooth"})}');
   p.push('async function delMovie(id){if(!confirm("Delete?"))return;var r=await fetch("/api/movies/"+id,{method:"DELETE",headers:{"X-Admin-Password":token}});if(r.ok)loadList()}');
