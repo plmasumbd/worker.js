@@ -1,7 +1,8 @@
 const ADMIN_PASSWORD = "admin123";
 const PAGE_SIZE = 20;
 const CACHE_TTL = 5 * 60 * 1000;
- 
+const URL_SAFETY_MARGIN = 90 * 1000; // 90s আগে refresh করব
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -26,7 +27,6 @@ export default {
     if (p === "/api/movies/trending" && request.method === "GET") return getTrendingMovies(env);
     if (p === "/api/movies/track-view" && request.method === "POST") return trackView(request, env);
     if (p === "/api/debug-embed" && request.method === "GET") return debugEmbed(url);
-
     if (p === "/api/stream" && request.method === "GET") return streamVideo(request, env, url);
 
     if (p === "/") return html(homePage());
@@ -34,22 +34,36 @@ export default {
     if (p === "/watch") return html(watchPage(url.searchParams.get("id")));
 
     return new Response("404", { status: 404 });
+  },
+
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(autoRefreshAll(env));
   }
 };
 
-// ================= URL EXPIRY =================
+// ================= URL EXPIRY (STRONG) =================
 function getUrlExpiry(url) {
   if (!url) return 0;
-  let m = url.match(/[?&]secure=[^,]+,\s*(\d{10})/i);
-  if (m) return parseInt(m[1], 10) * 1000;
-  m = url.match(/[?&]expires=(\d{10})/i);
-  if (m) return parseInt(m[1], 10) * 1000;
-  m = url.match(/[?&]e=(\d{10})/i);
-  if (m) return parseInt(m[1], 10) * 1000;
+  const s = String(url);
+  let m;
+  m = s.match(/[?&]secure=[^,&]+,\s*(\d{10,13})/i);
+  if (m) { const t = parseInt(m[1], 10); return t < 1e12 ? t * 1000 : t; }
+  m = s.match(/[?&]secure=[^,&]+%2C(\d{10,13})/i);
+  if (m) { const t = parseInt(m[1], 10); return t < 1e12 ? t * 1000 : t; }
+  m = s.match(/[?&](?:expires|e|exp|valid|timestamp|ts)=(\d{10,13})/i);
+  if (m) { const t = parseInt(m[1], 10); return t < 1e12 ? t * 1000 : t; }
+  m = s.match(/\/(\d{10,13})\//);
+  if (m) { const t = parseInt(m[1], 10); return t < 1e12 ? t * 1000 : t; }
   return 0;
 }
 
-// ================= STREAM PROXY =================
+function isUrlExpired(url) {
+  const exp = getUrlExpiry(url);
+  if (exp === 0) return false;
+  return Date.now() > (exp - URL_SAFETY_MARGIN);
+}
+
+// ================= STREAM PROXY (BULLETPROOF) =================
 async function streamVideo(request, env, url) {
   const id = url.searchParams.get("id");
   if (!id) return new Response("ID required", { status: 400 });
@@ -61,10 +75,10 @@ async function streamVideo(request, env, url) {
 
   const movie = list[idx];
   let videoUrl = movie.contentUrl || "";
-  const expiry = getUrlExpiry(videoUrl);
-  const isExpired = expiry > 0 && Date.now() > (expiry - 60000);
+  let needRefresh = !videoUrl || isUrlExpired(videoUrl);
 
-  if (!videoUrl || isExpired) {
+  // Auto refresh যদি দরকার
+  if (needRefresh) {
     const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
     if (embedUrl) {
       try {
@@ -79,66 +93,69 @@ async function streamVideo(request, env, url) {
         }
       } catch (e) {}
     }
-    if (!videoUrl) return new Response("No video", { status: 404 });
+    if (!videoUrl) return new Response("No video available", { status: 404 });
   }
 
+  // Range + headers
   const range = request.headers.get("Range");
-  const headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-    "Accept": "*/*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": movie.embedUrl || "https://expmle.com/",
-    "Origin": (() => {
-      try { return new URL(movie.embedUrl || videoUrl).origin; } catch (e) { return ""; }
-    })(),
+  const makeHeaders = () => {
+    const h = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+      "Accept": "*/*",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Referer": movie.embedUrl || "https://expmle.com/",
+      "Origin": (() => {
+        try { return new URL(movie.embedUrl || videoUrl).origin; } catch (e) { return "https://expmle.com"; }
+      })(),
+    };
+    if (range) h["Range"] = range;
+    return h;
   };
-  if (range) headers["Range"] = range;
 
-  try {
-    const upstream = await fetch(videoUrl, { headers, redirect: "follow" });
+  const tryFetch = async (u) => {
+    try { return await fetch(u, { headers: makeHeaders(), redirect: "follow" }); }
+    catch (e) { return null; }
+  };
 
-    if (!upstream.ok && upstream.status !== 206) {
-      const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
-      if (embedUrl) {
-        try {
-          const fresh = await fetchFreshFromEmbed(embedUrl);
-          if (fresh.contentUrl && fresh.contentUrl !== videoUrl) {
-            const h2 = { ...headers };
-            if (range) h2["Range"] = range;
-            const up2 = await fetch(fresh.contentUrl, { headers: h2, redirect: "follow" });
-            if (up2.ok || up2.status === 206) {
-              list[idx].contentUrl = fresh.contentUrl;
-              list[idx].videoUrl = fresh.contentUrl;
-              list[idx].lastRefresh = Date.now();
-              list[idx].urlExpiry = getUrlExpiry(fresh.contentUrl);
-              await env.MOVIES.put("movie_list", JSON.stringify(list));
-              return buildStreamResponse(up2, fresh.contentUrl);
-            }
-          }
-        } catch (e) {}
-      }
-      return new Response("Stream error: " + upstream.status, { status: upstream.status });
+  let upstream = await tryFetch(videoUrl);
+
+  // ❌ Fail → fresh URL দিয়ে retry
+  if (!upstream || (!upstream.ok && upstream.status !== 206)) {
+    const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
+    if (embedUrl) {
+      try {
+        const fresh = await fetchFreshFromEmbed(embedUrl);
+        if (fresh.contentUrl && fresh.contentUrl !== videoUrl) {
+          list[idx].contentUrl = fresh.contentUrl;
+          list[idx].videoUrl = fresh.contentUrl;
+          list[idx].lastRefresh = Date.now();
+          list[idx].urlExpiry = getUrlExpiry(fresh.contentUrl);
+          await env.MOVIES.put("movie_list", JSON.stringify(list));
+
+          videoUrl = fresh.contentUrl;
+          upstream = await tryFetch(videoUrl);
+        }
+      } catch (e) {}
     }
-
-    return buildStreamResponse(upstream, videoUrl);
-  } catch (e) {
-    return new Response("Stream fetch failed: " + e.message, { status: 502 });
+    if (!upstream || (!upstream.ok && upstream.status !== 206)) {
+      return new Response("Stream unavailable", { status: upstream ? upstream.status : 502 });
+    }
   }
+
+  return buildStreamResponse(upstream, videoUrl);
 }
 
 function buildStreamResponse(upstream, videoUrl) {
   const newHeaders = new Headers();
-  const ct = upstream.headers.get("Content-Type") || guessContentType(videoUrl);
-  newHeaders.set("Content-Type", ct);
+  newHeaders.set("Content-Type", upstream.headers.get("Content-Type") || guessContentType(videoUrl));
   const cl = upstream.headers.get("Content-Length");
   if (cl) newHeaders.set("Content-Length", cl);
   const cr = upstream.headers.get("Content-Range");
   if (cr) newHeaders.set("Content-Range", cr);
-  const ar = upstream.headers.get("Accept-Ranges");
-  newHeaders.set("Accept-Ranges", ar || "bytes");
-  newHeaders.set("Cache-Control", "public, max-age=3600");
+  newHeaders.set("Accept-Ranges", "bytes");
+  newHeaders.set("Cache-Control", "public, max-age=1800");
   newHeaders.set("Access-Control-Allow-Origin", "*");
-  newHeaders.set("Access-Control-Allow-Headers", "Range");
+  newHeaders.set("Access-Control-Allow-Headers", "Range, Content-Type");
   newHeaders.set("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges");
 
   return new Response(upstream.body, {
@@ -169,22 +186,18 @@ async function autoContent(request, env) {
     if (idx === -1) return json({ error: "Not found" }, 404);
 
     const movie = list[idx];
-    const forceRefresh = b.forceRefresh === true;
+    const force = b.forceRefresh === true;
     const now = Date.now();
+    const expired = isUrlExpired(movie.contentUrl);
+    const fresh = (now - (movie.lastRefresh || 0)) < CACHE_TTL;
 
-    const expiry = getUrlExpiry(movie.contentUrl);
-    const isExpired = expiry > 0 && now > (expiry - 60 * 1000);
-    const isFresh = (now - (movie.lastRefresh || 0)) < CACHE_TTL;
-
-    if (!forceRefresh && movie.contentUrl && isFresh && !isExpired) {
+    if (!force && movie.contentUrl && fresh && !expired) {
       return json({ success: true, contentUrl: movie.contentUrl, cached: true });
     }
 
     const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
     if (!embedUrl) {
-      if (movie.contentUrl && !isExpired) {
-        return json({ success: true, contentUrl: movie.contentUrl, cached: true, stale: true });
-      }
+      if (movie.contentUrl && !expired) return json({ success: true, contentUrl: movie.contentUrl, cached: true, stale: true });
       return json({ error: "No embedUrl" }, 400);
     }
 
@@ -197,17 +210,10 @@ async function autoContent(request, env) {
       if (freshData.title) list[idx].title = freshData.title;
       if (freshData.thumbnail) list[idx].thumbnail = freshData.thumbnail;
       await env.MOVIES.put("movie_list", JSON.stringify(list));
-      return json({
-        success: true,
-        contentUrl: freshData.contentUrl,
-        cached: false,
-        expiry: list[idx].urlExpiry
-      });
+      return json({ success: true, contentUrl: freshData.contentUrl, cached: false, expiry: list[idx].urlExpiry });
     }
 
-    if (movie.contentUrl && !isExpired) {
-      return json({ success: true, contentUrl: movie.contentUrl, cached: true, stale: true });
-    }
+    if (movie.contentUrl && !expired) return json({ success: true, contentUrl: movie.contentUrl, cached: true, stale: true });
     return json({ error: "লিংক পাওয়া যায়নি" }, 502);
   } catch (e) { return json({ error: e.message }, 500); }
 }
@@ -224,8 +230,7 @@ async function debugEmbed(url) {
       if (!text) return result.attempts.push({ method: label, error: "empty" });
       const svH = text.match(/(?:html5player\.)?setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]/i);
       result.attempts.push({
-        method: label,
-        length: text.length,
+        method: label, length: text.length,
         foundSetVideoUrlHigh: svH ? svH[1] : null,
         hasSetVideo: /setVideoUrl/i.test(text),
         hasHtml5player: /html5player/i.test(text),
@@ -233,11 +238,7 @@ async function debugEmbed(url) {
         hasMp4: /\.mp4/i.test(text),
         extracted: extractVideoUrl(text) || null,
         preview: text.slice(0, 800),
-        around: (() => {
-          const i = text.search(/setVideoUrl/i);
-          if (i === -1) return "";
-          return text.slice(Math.max(0, i - 100), i + 400);
-        })()
+        around: (() => { const i = text.search(/setVideoUrl/i); return i === -1 ? "" : text.slice(Math.max(0, i - 100), i + 400); })()
       });
     } catch (e) { result.attempts.push({ method: label, error: e.message }); }
   };
@@ -264,8 +265,7 @@ async function debugEmbed(url) {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
         "Referer": "https://expmle.com/",
         "Accept": "text/html,application/xhtml+xml,*/*;q=0.8"
-      },
-      redirect: "follow"
+      }, redirect: "follow"
     });
     return r.ok ? await r.text() : null;
   });
@@ -301,19 +301,34 @@ async function refreshMovie(request, env) {
   } catch (e) { return json({ error: e.message }, 500); }
 }
 
-// ================= REFRESH ALL =================
+// ================= REFRESH ALL (MANUAL) =================
 async function refreshAll(request, env) {
   const auth = request.headers.get("X-Admin-Password");
   if (auth !== ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
+  const result = await autoRefreshAll(env, true);
+  return json({ success: true, ...result });
+}
+
+// ================= AUTO REFRESH (CRON) =================
+async function autoRefreshAll(env, verbose = false) {
   const raw = await env.MOVIES.get("movie_list");
   const list = raw ? JSON.parse(raw) : [];
-  let ok = 0, fail = 0;
+  let ok = 0, fail = 0, skipped = 0;
   const failures = [];
+
   for (let i = 0; i < list.length; i++) {
     const movie = list[i];
+    const videoUrl = movie.contentUrl || "";
+    const expired = isUrlExpired(videoUrl);
+    const stale = (Date.now() - (movie.lastRefresh || 0)) > CACHE_TTL;
+
+    if (!verbose && videoUrl && !expired && !stale) { skipped++; continue; }
+
     const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
-    if (!embedUrl) { fail++; failures.push({ id: movie.id, title: movie.title, reason: "no embedUrl" }); }
-    else {
+    if (!embedUrl) {
+      fail++;
+      if (verbose) failures.push({ id: movie.id, title: movie.title, reason: "no embedUrl" });
+    } else {
       try {
         const fresh = await fetchFreshFromEmbed(embedUrl);
         if (fresh.contentUrl) {
@@ -325,49 +340,60 @@ async function refreshAll(request, env) {
           if (fresh.views) movie.views = fresh.views;
           movie.lastRefresh = Date.now();
           ok++;
-        } else { fail++; failures.push({ id: movie.id, title: movie.title, reason: "no video URL" }); }
-      } catch (e) { fail++; failures.push({ id: movie.id, title: movie.title, reason: e.message }); }
+        } else {
+          fail++;
+          if (verbose) failures.push({ id: movie.id, title: movie.title, reason: "no video URL" });
+        }
+      } catch (e) {
+        fail++;
+        if (verbose) failures.push({ id: movie.id, title: movie.title, reason: e.message });
+      }
     }
-    if (i < list.length - 1) await new Promise(r => setTimeout(r, 2000 + Math.random() * 1000));
-    if ((i + 1) % 5 === 0 || i === list.length - 1) await env.MOVIES.put("movie_list", JSON.stringify(list));
+    if ((i + 1) % 5 === 0 || i === list.length - 1) {
+      await env.MOVIES.put("movie_list", JSON.stringify(list));
+    }
+    await new Promise(r => setTimeout(r, 1500 + Math.random() * 1000));
   }
-  return json({ success: true, ok, fail, failures });
+  return { ok, fail, skipped, failures };
 }
 
-// ================= FETCH FRESH =================
+// ================= FETCH FRESH (STRONG EXTRACTOR) =================
 async function fetchFreshFromEmbed(embedUrl) {
   const out = { contentUrl: "", title: "", thumbnail: "", views: 0, source: "" };
   let text = "";
 
-  const tryText = async (fn) => {
+  const isValid = (t) => {
+    if (!t || t.length < 200) return false;
+    return /setVideoUrl|\.mp4|\.m3u8|"contentUrl"|jwplayer|html5player|"sources"/i.test(t);
+  };
+
+  const tryText = async (fn, label) => {
     try {
       const t = await fn();
-      if (t && t.length > 200 && /setVideoUrl|\.mp4|\.m3u8|contentUrl|sources|jwplayer|html5player/i.test(t)) {
-        text = t; return true;
-      }
+      if (isValid(t)) { text = t; out.source = label; return true; }
     } catch (e) {}
     return false;
   };
 
   if (!text) await tryText(async () => {
     const r = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "html" } });
-    if (r.ok) { out.source = "jina-html"; return await r.text(); }
-  });
+    return r.ok ? await r.text() : null;
+  }, "jina-html");
 
   if (!text) await tryText(async () => {
     const r = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "text" } });
-    if (r.ok) { out.source = "jina-text"; return await r.text(); }
-  });
+    return r.ok ? await r.text() : null;
+  }, "jina-text");
 
   if (!text) await tryText(async () => {
     const r = await fetch("https://api.allorigins.win/raw?url=" + encodeURIComponent(embedUrl));
-    if (r.ok) { out.source = "allorigins"; return await r.text(); }
-  });
+    return r.ok ? await r.text() : null;
+  }, "allorigins");
 
   if (!text) await tryText(async () => {
     const r = await fetch("https://corsproxy.io/?url=" + encodeURIComponent(embedUrl));
-    if (r.ok) { out.source = "corsproxy"; return await r.text(); }
-  });
+    return r.ok ? await r.text() : null;
+  }, "corsproxy");
 
   if (!text) await tryText(async () => {
     const r = await fetch(embedUrl, {
@@ -375,11 +401,10 @@ async function fetchFreshFromEmbed(embedUrl) {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
         "Referer": "https://expmle.com/",
         "Accept": "text/html,application/xhtml+xml,*/*;q=0.8"
-      },
-      redirect: "follow"
+      }, redirect: "follow"
     });
-    if (r.ok) { out.source = "direct"; return await r.text(); }
-  });
+    return r.ok ? await r.text() : null;
+  }, "direct");
 
   if (!text) return out;
 
@@ -403,7 +428,7 @@ async function fetchFreshFromEmbed(embedUrl) {
   return out;
 }
 
-// ================= UNIVERSAL EXTRACTOR =================
+// ================= EXTRACTOR =================
 function extractVideoUrl(text) {
   const clean = (u) => u
     .replace(/\\\//g, "/")
@@ -419,7 +444,6 @@ function extractVideoUrl(text) {
     /(?:html5player\.)?setVideoUrlLow\s*\(\s*['"]([^'"]+)['"]/i,
     /(?:html5player\.)?setVideoUrl\s*\(\s*['"]([^'"]+)['"]/i,
     /"contentUrl"\s*:\s*"([^"]+)"/i,
-    /"embedUrl"\s*:\s*"([^"]+)"/i,
     /(?:file|src|source|url)\s*[:=]\s*['"]([^'"]+\.(?:mp4|m3u8|webm|mkv)[^'"]*)['"]/i,
     /"sources"\s*:\s*\[\s*\{[^}]*"(?:file|src)"\s*:\s*"([^"]+)"/i,
     /\.setup\s*\(\s*\{[^}]*["']?(?:file|src)["']?\s*:\s*["']([^"']+)/i,
@@ -437,9 +461,7 @@ function extractVideoUrl(text) {
     const m = text.match(pat);
     if (m && m[1]) {
       const url = clean(m[1]);
-      if (/^(https?:)?\/\//i.test(url) || /^\/[^\s]+\.(mp4|m3u8)/i.test(url)) {
-        return url;
-      }
+      if (/^(https?:)?\/\//i.test(url) || /^\/[^\s]+\.(mp4|m3u8)/i.test(url)) return url;
     }
   }
   return "";
@@ -459,9 +481,7 @@ function deriveEmbedUrl(movie) {
     if (m) return m[1];
     if (/embedframe/i.test(movie.videoUrl) && /^https?:\/\//i.test(movie.videoUrl)) return movie.videoUrl;
   }
-  if (movie.id && /^[a-z0-9\-]+$/i.test(String(movie.id))) {
-    return "https://expmle.com/embedframe/" + movie.id;
-  }
+  if (movie.id && /^[a-z0-9\-]+$/i.test(String(movie.id))) return "https://expmle.com/embedframe/" + movie.id;
   return "";
 }
 
@@ -579,7 +599,6 @@ async function addMovie(request, env) {
   const contentUrl = (b.contentUrl || "").trim();
   const vurl = contentUrl || embedUrl;
 
-  // 🔥 DUPLICATE CHECK — একই ভিডিও ২ বার add হবে না
   const normalizeUrl = (u) => {
     if (!u) return "";
     let s = String(u).trim().toLowerCase();
@@ -598,15 +617,9 @@ async function addMovie(request, env) {
   const newContentKey = normalizeUrl(contentUrl);
 
   for (const existing of list) {
-    if (newVideoId && existing.id === newVideoId) {
-      return json({ error: "এই ভিডিও আগেই আছে! (Video ID মিলেছে)" }, 400);
-    }
-    if (newEmbedKey && normalizeUrl(existing.embedUrl) === newEmbedKey) {
-      return json({ error: "এই ভিডিও আগেই আছে! (Embed URL মিলেছে)" }, 400);
-    }
-    if (newContentKey && existing.contentUrl && normalizeUrl(existing.contentUrl) === newContentKey) {
-      return json({ error: "এই ভিডিও আগেই আছে! (Content URL মিলেছে)" }, 400);
-    }
+    if (newVideoId && existing.id === newVideoId) return json({ error: "এই ভিডিও আগেই আছে! (Video ID মিলেছে)" }, 400);
+    if (newEmbedKey && normalizeUrl(existing.embedUrl) === newEmbedKey) return json({ error: "এই ভিডিও আগেই আছে! (Embed URL মিলেছে)" }, 400);
+    if (newContentKey && existing.contentUrl && normalizeUrl(existing.contentUrl) === newContentKey) return json({ error: "এই ভিডিও আগেই আছে! (Content URL মিলেছে)" }, 400);
   }
 
   let thumb = (b.thumbnail || "").trim();
@@ -688,11 +701,7 @@ async function getIntervalLink(env) {
   const raw = await env.MOVIES.get("interval_link");
   const secs = await env.MOVIES.get("interval_seconds");
   const first = await env.MOVIES.get("interval_first_delay");
-  return json({
-    url: raw || "",
-    seconds: parseInt(secs || "60"),
-    firstDelay: parseInt(first || "15")
-  });
+  return json({ url: raw || "", seconds: parseInt(secs || "60"), firstDelay: parseInt(first || "15") });
 }
 async function saveIntervalLink(request, env) {
   const auth = request.headers.get("X-Admin-Password");
@@ -793,7 +802,6 @@ function homePage() {
   return p.join("\n");
 }
 
-// ================= WATCH PAGE ============
 // ================= WATCH PAGE =================
 function watchPage(id) {
   const p = [];
@@ -807,7 +815,7 @@ function watchPage(id) {
   p.push('.wrap{max-width:1000px;margin:24px auto;padding:0 16px}');
   p.push('.player-wrap{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center;max-width:860px;margin:0 auto}');
   p.push('.player{width:100%;height:100%;position:relative}');
-  p.push('.player video{width:100%;height:100%;border:0;display:block;object-fit:contain}');
+  p.push('.player video{width:100%;height:100%;border:0;display:block;object-fit:contain;background:#000}');
   p.push('.loader-box{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#000;z-index:10}');
   p.push('.spinner{width:50px;height:50px;border:5px solid rgba(255,0,64,.2);border-top-color:#ff0040;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:15px}');
   p.push('@keyframes spin{to{transform:rotate(360deg)}}');
@@ -839,8 +847,6 @@ function watchPage(id) {
   p.push('.video-error h3{color:#ff0040;font-size:18px;margin-bottom:10px}');
   p.push('.video-error p{color:#ccc;font-size:14px;margin-bottom:16px;max-width:400px}');
   p.push('.video-error button{background:#ff0040;color:#fff;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-weight:bold}');
-  
-  // 🔥 ওভারলে স্টাইল
   p.push('.ad-overlay{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.95);z-index:99;display:none;flex-direction:column;align-items:center;justify-content:center;text-align:center}');
   p.push('.ad-overlay.show{display:flex}');
   p.push('.ad-iframe-box{width:100%;height:100%;border:none;background:#fff}');
@@ -849,14 +855,11 @@ function watchPage(id) {
   p.push('.ad-close{background:#ff0040;color:#fff;padding:12px 24px;border-radius:6px;font-size:15px;font-weight:bold;border:none;cursor:pointer;display:none;box-shadow:0 4px 15px rgba(255,0,64,0.5);transition:0.2s}');
   p.push('.ad-close.show{display:block}');
   p.push('.ad-close:hover{background:#d10035}');
-  
   p.push('@media(max-width:768px){.title{font-size:16px}.related-grid{grid-template-columns:repeat(2,1fr)}.wrap{padding:0 12px}}');
   p.push('</style></head><body>');
   p.push('<header><a href="/" class="logo">AdultMovie</a><a href="/" class="back-btn">← Home</a></header>');
   p.push('<div class="wrap">');
   p.push('<div class="player-wrap" id="playerWrap">');
-  
-  // 🔥 ইন-পেজ অ্যাড ওভারলে HTML
   p.push('  <div class="ad-overlay" id="adOverlay">');
   p.push('    <iframe id="adIframe" class="ad-iframe-box" src="about:blank" scrolling="no" allow="autoplay; fullscreen"></iframe>');
   p.push('    <div class="ad-controls">');
@@ -864,10 +867,9 @@ function watchPage(id) {
   p.push('      <button class="ad-close" id="adCloseBtn" onclick="closeAd()">✖ Close Ad & Play</button>');
   p.push('    </div>');
   p.push('  </div>');
-
   p.push('  <div class="loader-box" id="loadingBox"><div class="spinner"></div><div class="loader-text" id="loaderText">Loading Video...</div></div>');
   p.push('  <div class="player" id="pb" style="display:none;"></div>');
-  p.push('  <div class="video-error" id="videoError"><h3>⚠️ Video Not Loading</h3><p>Try another video below.</p><button onclick="location.reload()">🔄 Reload</button></div>');
+  p.push('  <div class="video-error" id="videoError"><h3>⚠️ Video Not Loading</h3><p>Try again or pick another video below.</p><button onclick="location.reload()">🔄 Reload</button></div>');
   p.push('</div>');
   p.push('<div class="title" id="t">Loading...</div>');
   p.push('<div class="meta" id="metaBar"></div>');
@@ -883,96 +885,79 @@ function watchPage(id) {
   p.push('function fmt(n){n=parseInt(n)||0;if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1e3)return(n/1e3).toFixed(1)+"K";return n}');
   p.push('function markWatched(id){try{var a=JSON.parse(localStorage.getItem("watched_ids")||"[]");var s=String(id);if(a.indexOf(s)===-1)a.push(s);if(a.length>500)a=a.slice(-500);localStorage.setItem("watched_ids",JSON.stringify(a))}catch(e){}}');
   p.push('function injectAds(id,code){var c=$(id);if(!c)return;c.innerHTML="";var t=document.createElement("div");t.innerHTML=code;var sc=[];Array.from(t.childNodes).forEach(function(n){if(n.tagName==="SCRIPT"){var s=document.createElement("script");if(n.src)s.src=n.src;else s.textContent=n.textContent;sc.push(s)}else{c.appendChild(n.cloneNode(true))}});sc.forEach(function(s){c.appendChild(s)})}');
-  
   p.push('var id=new URLSearchParams(location.search).get("id");');
   p.push('var movieData=null;');
-  p.push('var refreshAttempted=false;');
+  p.push('var retryCount=0;');
+  p.push('var maxRetries=4;');
   p.push('var adTimerInterval=null;');
-
-  // 🔥 ৬ সেকেন্ডের অ্যাড লজিক
   p.push('async function initAdOverlay(){');
-  // 🔥🔥🔥 এখানেই সেই ম্যাজিক! চেক করছে ইউজার অ্যাডমিন কিনা।
-  p.push('  var isAdmin = localStorage.getItem("admin_token");');
-  p.push('  if(isAdmin){');
-  p.push('     console.log("Admin logged in. Skipping ad.");');
-  p.push('     return; // অ্যাডমিন হলে অ্যাড দেখাবে না, সরাসরি রিটার্ন করবে');
-  p.push('  }');
-  // 🔥🔥🔥
-
+  p.push('  var isAdmin=localStorage.getItem("admin_token");');
+  p.push('  if(isAdmin){return;}');
   p.push('  try{');
-  p.push('    var r=await fetch("/api/interval-link");'); 
+  p.push('    var r=await fetch("/api/interval-link");');
   p.push('    var d=await r.json();');
   p.push('    if(d.url && d.url.trim()){');
-  p.push('      $("adIframe").src=d.url.trim();'); 
+  p.push('      $("adIframe").src=d.url.trim();');
   p.push('      $("adOverlay").classList.add("show");');
-  
-  // ভিডিও পজ রাখা
   p.push('      var v=document.querySelector("video");');
   p.push('      if(v) v.pause();');
-  
-  // ৬ সেকেন্ডের কাউন্টডাউন
   p.push('      var timeLeft=6;');
   p.push('      $("adTimer").textContent="Ad closes in "+timeLeft+"s";');
   p.push('      adTimerInterval=setInterval(function(){');
   p.push('        timeLeft--;');
   p.push('        $("adTimer").textContent="Ad closes in "+timeLeft+"s";');
-  p.push('        if(timeLeft<=0){');
-  p.push('          clearInterval(adTimerInterval);');
-  p.push('          $("adTimer").style.display="none";');
-  p.push('          $("adCloseBtn").classList.add("show");'); 
-  p.push('        }');
+  p.push('        if(timeLeft<=0){clearInterval(adTimerInterval);$("adTimer").style.display="none";$("adCloseBtn").classList.add("show");}');
   p.push('      },1000);');
   p.push('    }');
-  p.push('  }catch(e){console.log("Ad load error", e)}');
+  p.push('  }catch(e){}');
   p.push('}');
-
-  p.push('function closeAd(){');
-  p.push('  $("adOverlay").classList.remove("show");'); 
-  p.push('  $("adIframe").src="about:blank";'); 
-  p.push('  var v=document.querySelector("video");');
-  p.push('  if(v) v.play();'); // ক্লোজ করলেই ভিডিও প্লে হবে
-  p.push('}');
-  // ==================
-
+  p.push('function closeAd(){$("adOverlay").classList.remove("show");$("adIframe").src="about:blank";var v=document.querySelector("video");if(v)v.play();}');
   p.push('async function loadData(){if(!id){$("t").textContent="No ID";return}try{var r=await fetch("/api/movie?id="+id);if(!r.ok)throw new Error("Not found");var d=await r.json();movieData=d.movie;document.title=movieData.title;$("t").textContent=movieData.title;renderMeta();markWatched(movieData.id);playVideo();loadRelated();loadTrending()}catch(e){$("t").textContent="Video Not Found";$("loadingBox").style.display="none";$("videoError").classList.add("show")}}');
   p.push('function trackView(){if(!movieData)return;fetch("/api/movies/track-view",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:movieData.id})}).then(function(r){return r.json()}).then(function(d){if(d.success&&d.views){movieData.views=d.views;renderMeta()}}).catch(function(){})}');
   p.push('function renderMeta(){if(!movieData)return;var v=movieData.views||0;$("metaBar").innerHTML=\'<span class="views">👁️ \'+fmt(v)+\' views</span>\'}');
   p.push('async function loadRelated(){if(!id)return;try{var r=await fetch("/api/movies/related?id="+id);var d=await r.json();var g=$("relatedGrid");g.innerHTML="";if(!d.items||!d.items.length){g.innerHTML=\'<p style="color:#666">No related</p>\';return}d.items.forEach(function(m){var a=document.createElement("a");a.className="rcard";a.href="/watch?id="+m.id;var s=m.thumbnail?"background-image:url(\'"+m.thumbnail+"\')":"";var v=m.views||0;a.innerHTML=\'<div class="rthumb" style="\'+s+\'"></div><div class="rinfo"><h4>\'+esc(m.title)+\'</h4><div class="rviews">👁 \'+fmt(v)+\'</div></div>\';g.appendChild(a)})}catch(e){}}');
   p.push('async function loadTrending(){try{var r=await fetch("/api/movies/trending");var d=await r.json();var g=$("trendingList");g.innerHTML="";if(!d.items)return;d.items.forEach(function(m,i){var a=document.createElement("a");a.className="tcard";a.href="/watch?id="+m.id;var s=m.thumbnail?"background-image:url(\'"+m.thumbnail+"\')":"";var v=m.views||0;a.innerHTML=\'<div class="tthumb" style="\'+s+\'"><div class="tnum">#\'+(i+1)+\'</div></div><div class="tinfo"><h4>\'+esc(m.title)+\'</h4><div class="tviews">👁 \'+fmt(v)+\' views</div></div>\';g.appendChild(a)})}catch(e){}}');
-  
   p.push('async function playVideo(){');
   p.push('  if(!movieData)return;');
   p.push('  $("pb").style.display="block";');
   p.push('  $("videoError").classList.remove("show");');
   p.push('  $("loadingBox").style.display="flex";');
   p.push('  $("loaderText").textContent="Loading video...";');
-  p.push('  var streamUrl="/api/stream?id="+encodeURIComponent(movieData.id);');
+  p.push('  retryCount=0;');
+  p.push('  var streamUrl="/api/stream?id="+encodeURIComponent(movieData.id)+"&t="+Date.now();');
   p.push('  playContent(streamUrl);');
   p.push('}');
-  
   p.push('function playContent(url){');
   p.push('  var pb=$("pb");');
+  p.push('  pb.innerHTML="";');
   p.push('  var v=document.createElement("video");');
-  p.push('  v.src=url;v.controls=true;v.autoplay=false;v.playsInline=true;v.setAttribute("playsinline","");'); 
+  p.push('  v.src=url;v.controls=true;v.autoplay=true;v.playsInline=true;v.preload="auto";v.setAttribute("playsinline","");');
   p.push('  v.style.cssText="width:100%;height:100%;object-fit:contain;background:#000";');
-  p.push('  v.onloadeddata=function(){ $("loadingBox").style.display="none"; };');
-  p.push('  v.onerror=function(){console.log("Stream failed, retrying once...");if(refreshAttempted){showVideoError();return;}refreshAttempted=true;$("loadingBox").style.display="flex";$("loaderText").textContent="Refreshing link...";setTimeout(function(){pb.innerHTML="";playContent("/api/stream?id="+encodeURIComponent(movieData.id)+"&t="+Date.now());},1500);};');
-  p.push('  setTimeout(function(){if($("loadingBox").style.display!=="none"&&v.readyState<2){if(refreshAttempted){showVideoError();}else{v.onerror();}}},25000);');
-  p.push('  pb.innerHTML="";pb.appendChild(v);');
+  p.push('  var loaded=false;');
+  p.push('  v.onloadeddata=function(){loaded=true;$("loadingBox").style.display="none";};');
+  p.push('  v.oncanplay=function(){loaded=true;$("loadingBox").style.display="none";};');
+  p.push('  v.onerror=function(){');
+  p.push('    if(retryCount>=maxRetries){showVideoError();return;}');
+  p.push('    retryCount++;');
+  p.push('    $("loadingBox").style.display="flex";');
+  p.push('    $("loaderText").textContent="Refreshing link... ("+retryCount+"/"+maxRetries+")";');
+  p.push('    setTimeout(function(){');
+  p.push('      var newUrl="/api/stream?id="+encodeURIComponent(movieData.id)+"&t="+Date.now()+"&r="+retryCount;');
+  p.push('      playContent(newUrl);');
+  p.push('    },1500+retryCount*500);');
+  p.push('  };');
+  p.push('  setTimeout(function(){if(!loaded&&v.readyState<2){if(retryCount>=maxRetries){showVideoError();}else{v.onerror();}}},25000);');
+  p.push('  pb.appendChild(v);');
   p.push('  trackView();');
-  
   p.push('  try{fetch("/api/ads").then(function(r){return r.json()}).then(function(ad){if(ad.code&&ad.code.trim())injectAds("adBox",ad.code)})}catch(e){}');
-  
-  // 🔥 অ্যাড ইনিশিয়ালাইজ (ভেতরে চেক আছে, অ্যাডমিন হলে শো করবে না)
-  p.push('  initAdOverlay();'); 
+  p.push('  initAdOverlay();');
   p.push('}');
-
   p.push('function showVideoError(){$("videoError").classList.add("show");$("loadingBox").style.display="none"}');
-  
   p.push('loadData();');
   p.push('<\/script></body></html>');
   return p.join("\n");
 }
+
 // ================= ADMIN PAGE =================
 function adminPage() {
   const p = [];
@@ -1015,20 +1000,13 @@ function adminPage() {
   p.push('</style></head><body>');
   p.push('<header><h1>Admin Panel</h1><a href="/">Home</a></header>');
   p.push('<div class="wrap">');
-
-  // ===== LOGIN =====
   p.push('<div id="login" class="card"><h2>Login</h2><label>Password</label><input type="password" id="pwd"><button class="primary" id="loginBtn">Login</button><div id="lm" class="msg"></div></div>');
-
-  // ===== CONTENT =====
   p.push('<div id="content" class="hidden">');
-
   p.push('<div class="tabs">');
   p.push('<button id="t1" class="active" data-tab="m">🎬 Movies</button>');
   p.push('<button id="t2" data-tab="ad">📢 Ad Code</button>');
   p.push('<button id="t3" data-tab="il">⏱️ Interval Link</button>');
   p.push('</div>');
-
-  // TAB: MOVIES
   p.push('<div id="tm">');
   p.push('<div class="card paste-box"><h2 style="color:#00c853;margin-bottom:10px">📋 Paste View Source</h2><p class="hint" style="margin-bottom:10px;color:#aaddff">ভিডিও পেজ → Ctrl+U → Ctrl+A → Ctrl+C → এখানে পেস্ট → Extract</p><textarea id="viewSource" placeholder="এখানে পুরো View Source কোড পেস্ট করুন..." style="min-height:150px"></textarea><button class="primary" style="background:#00c853;margin-top:10px" id="parseSourceBtn">🔍 Extract & Fill</button><div id="psm" class="msg" style="margin-top:10px"></div></div>');
   p.push('<div class="card"><h2 id="ft">Add / Edit Movie</h2><input type="hidden" id="eid"><input type="hidden" id="videoIdField">');
@@ -1039,11 +1017,7 @@ function adminPage() {
   p.push('<label>Video URL / Embed</label><textarea id="vurl"></textarea>');
   p.push('<button class="primary" id="sb">Add Movie</button><button class="primary hidden" style="background:#333" id="cb" type="button">Cancel</button><div id="am" class="msg"></div></div>');
   p.push('<div class="card"><h2>All Movies</h2><div id="list"></div></div></div>');
-
-  // TAB: AD CODE
   p.push('<div id="tad" class="hidden"><div class="card"><h2>Ad Code</h2><textarea id="ads" style="min-height:200px" placeholder="Ad script / HTML এখানে পেস্ট করুন"></textarea><button class="primary" id="adsSaveBtn">Save</button><div id="adm" class="msg"></div></div></div>');
-
-  // TAB: INTERVAL LINK
   p.push('<div id="til" class="hidden">');
   p.push('<div class="card">');
   p.push('<h2>⏱️ Interval Link Settings</h2>');
@@ -1059,18 +1033,13 @@ function adminPage() {
   p.push('<div id="ilm" class="msg"></div>');
   p.push('</div>');
   p.push('</div>');
-
   p.push('<button class="primary danger" id="logoutBtn">Logout</button>');
   p.push('</div></div>');
-
-  // ===== SCRIPT =====
   p.push('<script>');
   p.push('var token=localStorage.getItem("admin_token")||"";');
   p.push('function $(i){return document.getElementById(i)}');
   p.push('function esc(s){return String(s).replace(/[&<>]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;"}[c]})}');
   p.push('function fmt(n){n=parseInt(n)||0;if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1e3)return(n/1e3).toFixed(1)+"K";return n}');
-
-  // INIT
   p.push('window.addEventListener("DOMContentLoaded",function(){');
   p.push(' $("loginBtn").onclick=doLogin;');
   p.push(' $("sb").onclick=saveMovie;');
@@ -1083,14 +1052,10 @@ function adminPage() {
   p.push(' document.querySelectorAll("[data-tab]").forEach(function(b){b.onclick=function(){tab(b.getAttribute("data-tab"))}});');
   p.push(' if(token)verify().then(function(ok){if(ok)show()});');
   p.push('});');
-
-  // AUTH
   p.push('async function verify(){try{var r=await fetch("/api/check-auth",{headers:{"X-Admin-Password":token}});return r.ok}catch(e){return false}}');
   p.push('async function doLogin(){var pwd=$("pwd").value;var m=$("lm");try{var r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pwd})});var d=await r.json();if(r.ok){token=d.token;localStorage.setItem("admin_token",token);show()}else{m.textContent=d.error||"Failed";m.className="msg err show"}}catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}}');
   p.push('function show(){$("login").classList.add("hidden");$("content").classList.remove("hidden");loadList();loadAds();loadIntervalLink()}');
   p.push('function logout(){localStorage.removeItem("admin_token");location.reload()}');
-
-  // TABS
   p.push('function tab(n){');
   p.push(' $("tm").classList.add("hidden");$("tad").classList.add("hidden");$("til").classList.add("hidden");');
   p.push(' $("t1").classList.remove("active");$("t2").classList.remove("active");$("t3").classList.remove("active");');
@@ -1098,11 +1063,7 @@ function adminPage() {
   p.push(' if(n==="ad"){$("tad").classList.remove("hidden");$("t2").classList.add("active")}');
   p.push(' if(n==="il"){$("til").classList.remove("hidden");$("t3").classList.add("active")}');
   p.push('}');
-
-  // FORM
   p.push('function reset(){$("eid").value="";$("title").value="";$("vurl").value="";$("thumb").value="";$("videoIdField").value="";$("embedUrl").value="";$("contentUrl").value="";$("ft").textContent="Add / Edit Movie";$("sb").textContent="Add Movie";$("cb").classList.add("hidden")}');
-
-  // PARSE VIEW SOURCE
   p.push('function parseViewSource(){');
   p.push('  var text=$("viewSource").value;var m=$("psm");');
   p.push('  if(!text||!text.trim()){m.textContent="View Source পেস্ট করুন";m.className="msg err show";return}');
@@ -1132,8 +1093,6 @@ function adminPage() {
   p.push('  if(found.length){m.innerHTML="✅ পাওয়া গেছে: <b>"+found.join(", ")+"</b>";m.className="msg ok show";m.style.color="#b6ffb6"}');
   p.push('  else{m.innerHTML="❌ কিছু পাওয়া যায়নি।";m.className="msg err show";m.style.color="#ffb6b6"}');
   p.push('}');
-
-  // SAVE MOVIE
   p.push('async function saveMovie(){');
   p.push('  var eid=$("eid").value;var title=$("title").value.trim();var embedUrl=$("embedUrl").value.trim();');
   p.push('  var contentUrl=$("contentUrl").value.trim();var thumb=$("thumb").value.trim();');
@@ -1148,24 +1107,13 @@ function adminPage() {
   p.push('    else{m.textContent=d.error||"Failed";m.className="msg err show"}');
   p.push('  }catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}');
   p.push('}');
-
-  // REFRESH
   p.push('async function refreshOne(id,btn){btn.disabled=true;var old=btn.textContent;btn.textContent="⏳";try{var r=await fetch("/api/refresh-movie",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({id:id})});var d=await r.json();if(r.ok){btn.textContent="✓"}else{btn.textContent="✗";alert(d.error||"Failed")}}catch(e){btn.textContent="✗";alert(e.message)}setTimeout(function(){btn.textContent=old;btn.disabled=false},1500)}');
-
   p.push('async function refreshAllBtn(){if(!confirm("সব refresh করবে?"))return;var b=$("refreshAllTop");if(b){b.disabled=true;b.textContent="⏳ Refreshing..."}try{var r=await fetch("/api/refresh-all",{method:"POST",headers:{"X-Admin-Password":token}});var d=await r.json();if(r.ok){var msg="OK: "+d.ok+"  Fail: "+d.fail;if(d.failures&&d.failures.length){msg+="\\n\\nপ্রথম ১০টা:\\n"+d.failures.slice(0,10).map(function(f){return "• "+f.title+": "+f.reason}).join("\\n")}alert(msg)}else{alert(d.error||"Failed")}}catch(e){alert(e.message)}if(b){b.disabled=false;b.textContent="🔄 Refresh All"}loadList()}');
-
-  // LOAD LIST
   p.push('async function loadList(){var pg=1,all=[];while(true){var r=await fetch("/api/movies?page="+pg+"&noshuffle=1");var d=await r.json();all=all.concat(d.items);if(pg>=d.totalPages)break;pg++}var el=$("list");if(!all.length){el.innerHTML=\'<p style="color:#666">No movies</p>\';return}el.innerHTML="";var hdr=document.createElement("div");hdr.style.cssText="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px";hdr.innerHTML=\'<div style="font-size:14px;color:#888">Total: \'+all.length+\'</div>\';var refAll=document.createElement("button");refAll.id="refreshAllTop";refAll.className="primary small";refAll.style.background="#ff9800";refAll.style.marginTop="0";refAll.textContent="🔄 Refresh All";refAll.onclick=refreshAllBtn;hdr.appendChild(refAll);el.appendChild(hdr);all.forEach(function(mv){var s=mv.thumbnail?"background-image:url(\'"+mv.thumbnail+"\')":"";var row=document.createElement("div");row.className="item";var hasC=mv.contentUrl?"✅":"⚠️";var info=document.createElement("div");info.className="info";info.innerHTML=\'<div class="mini" style="\'+s+\'"></div><div><h4>\'+esc(mv.title)+\' \'+hasC+\'</h4><div class="stats">👁 \'+fmt(mv.views||0)+\'</div></div>\';var acts=document.createElement("div");acts.className="acts";var rb=document.createElement("button");rb.className="primary small";rb.style.background="#ff9800";rb.style.marginTop="0";rb.textContent="🔄 Refresh";rb.onclick=function(){refreshOne(mv.id,rb)};var eb=document.createElement("button");eb.className="primary small";eb.style.marginTop="0";eb.textContent="Edit";eb.onclick=function(){editMovie(mv.id)};var db=document.createElement("button");db.className="primary small danger";db.style.marginTop="0";db.textContent="Delete";db.onclick=function(){delMovie(mv.id)};acts.appendChild(rb);acts.appendChild(eb);acts.appendChild(db);row.appendChild(info);row.appendChild(acts);el.appendChild(row)})}');
-
   p.push('async function editMovie(id){var pg=1,all=[];while(true){var r=await fetch("/api/movies?page="+pg+"&noshuffle=1");var d=await r.json();all=all.concat(d.items);if(pg>=d.totalPages)break;pg++}var mv=all.find(function(x){return x.id===id});if(!mv)return;$("eid").value=mv.id;$("title").value=mv.title;$("embedUrl").value=mv.embedUrl||"";$("contentUrl").value=mv.contentUrl||"";$("thumb").value=mv.thumbnail||"";$("vurl").value=mv.videoUrl||"";$("videoIdField").value="";$("ft").textContent="Edit Movie";$("sb").textContent="Update";$("cb").classList.remove("hidden");window.scrollTo({top:0,behavior:"smooth"})}');
-
   p.push('async function delMovie(id){if(!confirm("Delete?"))return;var r=await fetch("/api/movies/"+encodeURIComponent(id),{method:"DELETE",headers:{"X-Admin-Password":token}});if(r.ok)loadList()}');
-
-  // ADS
   p.push('async function loadAds(){var r=await fetch("/api/ads");var d=await r.json();$("ads").value=d.code||""}');
   p.push('async function saveAds(){var code=$("ads").value;var m=$("adm");var r=await fetch("/api/ads",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({code:code})});if(r.ok){m.textContent="Saved";m.className="msg ok show"}else{m.textContent="Failed";m.className="msg err show"}setTimeout(function(){m.classList.remove("show")},2500)}');
-
-  // INTERVAL LINK
   p.push('async function loadIntervalLink(){');
   p.push('  try{');
   p.push('    var r=await fetch("/api/interval-link");');
@@ -1175,7 +1123,6 @@ function adminPage() {
   p.push('    $("intervalFirstDelayInput").value=d.firstDelay||15;');
   p.push('  }catch(e){console.log("load interval failed",e)}');
   p.push('}');
-
   p.push('async function saveIntervalLink(){');
   p.push('  var u=$("intervalLinkInput").value.trim();');
   p.push('  var s=parseInt($("intervalSecondsInput").value)||60;');
@@ -1189,7 +1136,6 @@ function adminPage() {
   p.push('  }catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}');
   p.push('  setTimeout(function(){m.classList.remove("show")},3000);');
   p.push('}');
-
   p.push('function testIntervalOpen(){');
   p.push('  var u=$("intervalLinkInput").value.trim();');
   p.push('  if(!u){alert("আগে URL দিন");return}');
@@ -1197,7 +1143,6 @@ function adminPage() {
   p.push('  if(w){w.blur();window.focus();}');
   p.push('  else{alert("Popup blocked! Browser-এ popup allow করুন।");}');
   p.push('}');
-
   p.push('<\/script></body></html>');
   return p.join("\n");
 }
