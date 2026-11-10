@@ -752,6 +752,9 @@ loadAds();load(1);
 
 // ═══════════════════════════════════════════════════════════
 // 🎬 Watch Page — with silent scrape + proxy fallback
+// 
+// ═══════════════════════════════════════════════════════════
+// 🎬 Watch Page — FAST version
 // ═══════════════════════════════════════════════════════════
 function watchPage(id) {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Watch</title>
@@ -785,18 +788,22 @@ header a.logo{color:#ff0040;font-size:22px;font-weight:bold;text-decoration:none
 .video-error p{color:#ccc;font-size:14px;margin-bottom:16px;max-width:400px}
 .video-error button{background:#ff0040;color:#fff;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-weight:bold}
 .ad-overlay{position:absolute;inset:0;background:rgba(0,0,0,.95);z-index:99;display:none;flex-direction:column;align-items:center;justify-content:center}
-.ad-overlay.show{display:flex}.ad-iframe-box{width:100%;height:100%;border:none;background:#fff}
+.ad-overlay.show{display:flex}.ad-iframe-box{width:100%;height:100%;border:none;background:#fff;position:absolute;top:0;left:0;z-index:1}
 .ad-controls{position:absolute;bottom:20px;right:20px;z-index:100;display:flex;flex-direction:column;align-items:flex-end;gap:10px}
 .ad-timer{background:rgba(0,0,0,0.8);color:#fff;padding:8px 15px;border-radius:20px;font-size:14px;font-weight:bold;border:1px solid #555}
 .ad-close{background:#ff0040;color:#fff;padding:12px 24px;border-radius:6px;font-size:15px;font-weight:bold;border:none;cursor:pointer;display:none;box-shadow:0 4px 15px rgba(255,0,64,0.5)}
 .ad-close.show{display:block}.ad-close:hover{background:#d10035}
+.ad-skip{position:absolute;top:20px;right:20px;z-index:100;background:rgba(0,0,0,.7);color:#fff;padding:8px 16px;border-radius:6px;font-size:12px;border:1px solid #555;cursor:pointer}
+.ad-skip:hover{background:#333}
 @media(max-width:768px){.title{font-size:16px}.related-grid{grid-template-columns:repeat(2,1fr)}}
 </style></head><body>
-<header><a href="/" class="logo">AdultMovie</a><a href="/" class="back-btn">← Home</a></header>
+<header><a href="/" class="logo">AdultMovie</a><a href="/" class="back-btn" onclick="if(history.length>1){event.preventDefault();history.back()}">← Home</a></header>
 <div class="wrap">
 <div class="player-wrap" id="playerWrap">
-<div class="ad-overlay" id="adOverlay"><iframe id="adIframe" class="ad-iframe-box" src="about:blank" scrolling="no"></iframe>
-<div class="ad-controls"><div class="ad-timer" id="adTimer">Ad closes in 6s</div><button class="ad-close" id="adCloseBtn" onclick="closeAd()">✖ Close Ad & Play</button></div></div>
+<div class="ad-overlay" id="adOverlay">
+<button class="ad-skip" id="adSkipBtn" onclick="closeAd()">Skip Ad ▶</button>
+<div class="ad-controls"><div class="ad-timer" id="adTimer">Loading...</div><button class="ad-close" id="adCloseBtn" onclick="closeAd()">✖ Close Ad & Play</button></div>
+</div>
 <div class="loader-box" id="loadingBox"><div class="spinner"></div><div class="loader-text" id="loaderText">Loading Video...</div></div>
 <div class="player" id="pb" style="display:none;"></div>
 <div class="video-error" id="videoError"><h3>⚠️ Video Not Loading</h3><p>Try reloading or pick another video.</p><button onclick="location.reload()">🔄 Reload</button></div>
@@ -816,15 +823,15 @@ function fmt(n){n=parseInt(n)||0;if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1e
 function markWatched(id){try{var a=JSON.parse(localStorage.getItem("watched_ids")||"[]");var s=String(id);if(a.indexOf(s)===-1)a.push(s);if(a.length>500)a=a.slice(-500);localStorage.setItem("watched_ids",JSON.stringify(a))}catch(e){}}
 function injectAds(id,code){var c=$(id);if(!c)return;c.innerHTML="";var t=document.createElement("div");t.innerHTML=code;var sc=[];Array.from(t.childNodes).forEach(function(n){if(n.tagName==="SCRIPT"){var s=document.createElement("script");if(n.src)s.src=n.src;else s.textContent=n.textContent;sc.push(s)}else{c.appendChild(n.cloneNode(true))}});sc.forEach(function(s){c.appendChild(s)})}
 var id=new URLSearchParams(location.search).get("id");
-var movieData=null,retryCount=0,maxRetries=4,adTimerInterval=null;
+var movieData=null,retryCount=0,maxRetries=3,adTimerInterval=null,adEndsAt=0,videoReady=false,videoEl=null,adClosed=false;
 
-// ⭐ Silent scraper helpers — WITH PROXY FALLBACK
+// ⚡ Fast iframe — 3s timeout instead of 7s
 function hiddenIframe(url){
   return new Promise(function(resolve){
     var ifr=document.createElement("iframe");
     ifr.style.cssText="position:fixed;top:0;left:0;width:1px;height:1px;opacity:0.01;pointer-events:none;z-index:-9999";
     ifr.src=url;var done=false;
-    var timer=setTimeout(function(){if(done)return;done=true;try{document.body.removeChild(ifr)}catch(e){};resolve(null)},7000);
+    var timer=setTimeout(function(){if(done)return;done=true;try{document.body.removeChild(ifr)}catch(e){};resolve(null)},3000);
     ifr.onload=function(){
       if(done)return;
       setTimeout(function(){
@@ -835,7 +842,7 @@ function hiddenIframe(url){
           if(!html||html.length<100)throw new Error("empty");
           done=true;clearTimeout(timer);try{document.body.removeChild(ifr)}catch(e){};resolve(html)
         }catch(e){done=true;clearTimeout(timer);try{document.body.removeChild(ifr)}catch(e2){};resolve(null)}
-      },1500)
+      },800)
     };
     document.body.appendChild(ifr)
   })
@@ -845,20 +852,33 @@ function extractUrl(html){
   for(var i=0;i<pats.length;i++){var m=html.match(pats[i]);if(m&&m[1])return m[1].replace(/\\\\\\//g,"/").replace(/&amp;/g,"&").replace(/\\\\/g,"")}
   return ""
 }
-// ⭐ Critical fix — iframe + proxy fallback
+// ⚡ RACE: all proxies at once, first one wins
 async function fetchHtmlBrowserClient(url){
-  try{
-    var h=await hiddenIframe(url);
-    if(h&&h.length>200&&(h.indexOf("setVideoUrl")>-1||h.indexOf(".mp4")>-1))return h
-  }catch(e){}
-  var proxies=["https://api.allorigins.win/raw?url=","https://corsproxy.io/?url=","https://r.jina.ai/"];
-  for(var i=0;i<proxies.length;i++){
-    try{
-      var r=await fetch(proxies[i]+encodeURIComponent(url),{headers:i===2?{"Accept":"text/plain","X-Return-Format":"html"}:{}});
-      if(r.ok){var t=await r.text();if(t&&t.length>200)return t}
-    }catch(e){}
-  }
-  return null;
+  var ifrPromise=hiddenIframe(url);
+  var proxies=[
+    {name:"allorigins",pre:"https://api.allorigins.win/raw?url=",hdr:{}},
+    {name:"corsproxy",pre:"https://corsproxy.io/?url=",hdr:{}},
+    {name:"jina",pre:"https://r.jina.ai/",hdr:{"Accept":"text/plain","X-Return-Format":"html"}}
+  ];
+  var proxyPromises=proxies.map(function(p){
+    return fetch(p.pre+encodeURIComponent(url),{headers:p.hdr})
+      .then(function(r){return r.ok?r.text():null})
+      .then(function(t){return (t&&t.length>200&&(t.indexOf("setVideoUrl")>-1||t.indexOf(".mp4")>-1))?t:null})
+      .catch(function(){return null});
+  });
+  var allPromises=[ifrPromise].concat(proxyPromises);
+  return new Promise(function(resolve){
+    var done=false;
+    allPromises.forEach(function(p){
+      p.then(function(h){
+        if(done)return;
+        if(h&&h.length>200&&(h.indexOf("setVideoUrl")>-1||h.indexOf(".mp4")>-1)){
+          done=true;resolve(h);
+        }
+      }).catch(function(){});
+    });
+    setTimeout(function(){if(!done){done=true;resolve(null)}},4500);
+  });
 }
 async function silentScrape(movie){
   if(!movie||!movie.embedUrl)return false;
@@ -871,49 +891,103 @@ async function silentScrape(movie){
     if(!url)return false;
     var r=await fetch("/api/silent-refresh",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:movie.id,videoUrl:url})});
     var d=await r.json();
-    if(d&&d.ok){
-      movie.contentUrl=url;movie.videoUrl=url;
-      return true;
-    }
+    if(d&&d.ok){movie.contentUrl=url;movie.videoUrl=url;return true}
     return false;
   }catch(e){return false}
 }
 
-async function initAdOverlay(){
-  if(localStorage.getItem("admin_token"))return;
-  try{var r=await fetch("/api/interval-link");var d=await r.json();
-  if(d.url&&d.url.trim()){$("adIframe").src=d.url.trim();$("adOverlay").classList.add("show");
-  var v=document.querySelector("video");if(v)v.pause();
-  var timeLeft=6;$("adTimer").textContent="Ad closes in "+timeLeft+"s";
-  adTimerInterval=setInterval(function(){timeLeft--;$("adTimer").textContent="Ad closes in "+timeLeft+"s";if(timeLeft<=0){clearInterval(adTimerInterval);$("adTimer").style.display="none";$("adCloseBtn").classList.add("show")}},1000)}}catch(e){}
+// ⚡ Ad: 4s countdown, video loads behind
+function showAdWithContent(adUrl){
+  var overlay=$("adOverlay");
+  if(!overlay)return;
+  overlay.classList.add("show");
+  var ifr=document.createElement("iframe");
+  ifr.className="ad-iframe-box";
+  ifr.src=adUrl;
+  ifr.scrolling="no";
+  ifr.allow="autoplay; fullscreen";
+  overlay.insertBefore(ifr,overlay.firstChild);
+  var totalSecs=4;
+  adEndsAt=Date.now()+totalSecs*1000;
+  $("adTimer").style.display="";
+  $("adTimer").textContent=totalSecs+"s";
+  $("adCloseBtn").classList.remove("show");
+  $("adSkipBtn").style.display="none";
+  adTimerInterval=setInterval(function(){
+    var left=Math.ceil((adEndsAt-Date.now())/1000);
+    if(left<=0){
+      clearInterval(adTimerInterval);
+      // Auto-close ad if video is ready
+      if(videoReady){
+        closeAd();
+      }else{
+        // Video not ready — show skip
+        $("adTimer").textContent="Loading...";
+        $("adSkipBtn").style.display="";
+        $("adCloseBtn").classList.add("show");
+      }
+    }else{
+      $("adTimer").textContent=left+"s";
+    }
+  },200);
 }
-function closeAd(){$("adOverlay").classList.remove("show");$("adIframe").src="about:blank";var v=document.querySelector("video");if(v)v.play()}
+
+function closeAd(){
+  if(adClosed)return;
+  adClosed=true;
+  $("adOverlay").classList.remove("show");
+  var ifr=$("adOverlay").querySelector("iframe");
+  if(ifr)ifr.remove();
+  if(adTimerInterval)clearInterval(adTimerInterval);
+  // Play video if ready
+  if(videoEl){
+    videoEl.play().catch(function(){});
+  }
+}
 
 async function loadData(){
   if(!id){$("t").textContent="No ID";return}
+  var isAdmin=!!localStorage.getItem("admin_token");
+  // ⚡ Fetch ad config in parallel with movie data
+  var adPromise=isAdmin?Promise.resolve(null):fetch("/api/interval-link").then(function(r){return r.json()}).catch(function(){return null});
+  var moviePromise=fetch("/api/movie?id="+id).then(function(r){if(!r.ok)throw new Error("Not found");return r.json()});
+  // ⚡ Show ad AS SOON AS config comes
+  adPromise.then(function(adConfig){
+    if(adConfig&&adConfig.url&&adConfig.url.trim()){
+      showAdWithContent(adConfig.url.trim());
+    }
+  });
   try{
-    var r=await fetch("/api/movie?id="+id);
-    if(!r.ok)throw new Error("Not found");
-    var d=await r.json();
+    var d=await moviePromise;
     movieData=d.movie;
     document.title=movieData.title;
     $("t").textContent=movieData.title;
     renderMeta();
     markWatched(movieData.id);
+    // ⚡ Start video + scrape in parallel
     var needsScrape=!movieData.contentUrl;
     if(!needsScrape&&movieData.urlExpiry)needsScrape=Date.now()>(movieData.urlExpiry-60000);
+    // Play video immediately with existing URL if present
+    if(movieData.contentUrl&&!needsScrape){
+      playVideo();
+    }
+    // Silent scrape in background if needed
     if(needsScrape){
       $("loadingBox").style.display="flex";
       $("loaderText").textContent="Loading video...";
-      try{await silentScrape(movieData)}catch(e){}
+      silentScrape(movieData).then(function(){
+        playVideo();
+      }).catch(function(){playVideo()});
     }
-    playVideo();
     loadRelated();
     loadTrending()
   }catch(e){
     $("t").textContent="Video Not Found";
     $("loadingBox").style.display="none";
-    $("videoError").classList.add("show")
+    $("videoError").classList.add("show");
+    $("adOverlay").classList.remove("show");
+    var ifr2=$("adOverlay").querySelector("iframe");
+    if(ifr2)ifr2.remove();
   }
 }
 
@@ -921,41 +995,70 @@ function trackView(){if(!movieData)return;fetch("/api/movies/track-view",{method
 function renderMeta(){if(!movieData)return;$("metaBar").innerHTML='<span class="views">👁️ '+fmt(movieData.views||0)+' views</span>'}
 async function loadRelated(){if(!id)return;try{var r=await fetch("/api/movies/related?id="+id);var d=await r.json();var g=$("relatedGrid");g.innerHTML="";if(!d.items||!d.items.length){g.innerHTML='<p style="color:#666">No related</p>';return}d.items.forEach(function(m){var a=document.createElement("a");a.className="rcard";a.href="/watch?id="+m.id;var s=m.thumbnail?"background-image:url('"+m.thumbnail+"')":"";a.innerHTML='<div class="rthumb" style="'+s+'"></div><div class="rinfo"><h4>'+esc(m.title)+'</h4><div class="rviews">👁 '+fmt(m.views||0)+'</div></div>';g.appendChild(a)})}catch(e){}}
 async function loadTrending(){try{var r=await fetch("/api/movies/trending");var d=await r.json();var g=$("trendingList");g.innerHTML="";if(!d.items)return;d.items.forEach(function(m,i){var a=document.createElement("a");a.className="tcard";a.href="/watch?id="+m.id;var s=m.thumbnail?"background-image:url('"+m.thumbnail+"')":"";a.innerHTML='<div class="tthumb" style="'+s+'"><div class="tnum">#'+(i+1)+'</div></div><div class="tinfo"><h4>'+esc(m.title)+'</h4><div class="tviews">👁 '+fmt(m.views||0)+' views</div></div>';g.appendChild(a)})}catch(e){}}
-async function playVideo(){if(!movieData)return;$("pb").style.display="block";$("videoError").classList.remove("show");$("loadingBox").style.display="flex";$("loaderText").textContent="Loading video...";retryCount=0;playContent("/api/stream?id="+encodeURIComponent(movieData.id)+"&t="+Date.now())}
+
+async function playVideo(){
+  if(!movieData)return;
+  $("pb").style.display="block";
+  $("videoError").classList.remove("show");
+  $("loadingBox").style.display="flex";
+  $("loaderText").textContent="Loading video...";
+  retryCount=0;
+  playContent("/api/stream?id="+encodeURIComponent(movieData.id)+"&t="+Date.now());
+}
+
 function playContent(url){
   var pb=$("pb");pb.innerHTML="";
-  var v=document.createElement("video");v.src=url;v.controls=true;v.autoplay=true;v.playsInline=true;v.preload="auto";
+  var v=document.createElement("video");
+  v.src=url;v.controls=true;v.autoplay=false;v.playsInline=true;v.preload="auto";
   v.style.cssText="width:100%;height:100%;object-fit:contain;background:#000";
+  videoEl=v;
   var finished=false;
   function finish(state){
     if(finished)return;finished=true;
-    if(state==="ok"){$("loadingBox").style.display="none"}
+    if(state==="ok"){
+      $("loadingBox").style.display="none";
+      videoReady=true;
+      // If ad already closed → play
+      if(adClosed||!$("adOverlay").classList.contains("show")){
+        v.play().catch(function(){});
+      }
+      // If ad is showing → video ready behind, will auto-play on close
+    }
     else if(state==="retry"){
       if(retryCount>=maxRetries){
+        $("adOverlay").classList.remove("show");
+        var ifr=$("adOverlay").querySelector("iframe");
+        if(ifr)ifr.remove();
         if(movieData){
           silentScrape(movieData).then(function(ok){
             if(ok){showVideoError();setTimeout(function(){location.reload()},100)}
             else{showVideoError()}
           })
-        } else {showVideoError()}
+        }else{showVideoError()}
         return
       }
       retryCount++;
       $("loadingBox").style.display="flex";
       $("loaderText").textContent="Loading video...";
-      setTimeout(function(){playContent("/api/stream?id="+encodeURIComponent(movieData.id)+"&t="+Date.now()+"&r="+retryCount)},1200)
+      setTimeout(function(){playContent("/api/stream?id="+encodeURIComponent(movieData.id)+"&t="+Date.now()+"&r="+retryCount)},800)
     }
     else{showVideoError()}
   }
   v.onerror=function(){finish("retry")};
   v.onloadeddata=function(){finish("ok")};
   v.oncanplay=function(){finish("ok")};
-  setTimeout(function(){if(!finished&&v.readyState<2)finish("retry")},12000);
+  setTimeout(function(){if(!finished&&v.readyState<2)finish("retry")},10000);
   pb.appendChild(v);trackView();
   try{fetch("/api/ads").then(function(r){return r.json()}).then(function(ad){if(ad.code&&ad.code.trim())injectAds("adBox",ad.code)})}catch(e){}
-  initAdOverlay();
 }
-function showVideoError(){$("videoError").classList.add("show");$("loadingBox").style.display="none"}
+
+function showVideoError(){
+  $("videoError").classList.add("show");
+  $("loadingBox").style.display="none";
+  $("adOverlay").classList.remove("show");
+  var ifr=$("adOverlay").querySelector("iframe");
+  if(ifr)ifr.remove();
+}
 loadData();
 </script></body></html>`;
 }
