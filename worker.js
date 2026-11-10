@@ -655,7 +655,6 @@ parts.push('  $("loadingBox").style.display="flex";');
 parts.push('  var mp4Regex=/\\.(mp4|webm|ogg|m3u8)(\\?|$)/i;');
 parts.push('  var isMp4=mp4Regex.test(movieData.videoUrl);');
 parts.push('  if(isMp4){');
-  // ✅ Try iframe first for letsporn embed
 parts.push('    var iframe = document.createElement("iframe");');
 parts.push('    var embedUrl = "https://letsporn.com/embed/" + movieData.id;');
 parts.push('    iframe.src = embedUrl;');
@@ -671,7 +670,6 @@ parts.push('    iframe.onload = function(){ setTimeout(function(){ $("loadingBox
 parts.push('    setTimeout(function(){ if($("loadingBox").style.display !== "none"){ showVideoError(); } }, 8000);');
 parts.push('    pb.appendChild(iframe);');
 parts.push('  }else{');
-  // Other URLs (iframes) - use as-is
 parts.push('    var f=document.createElement("iframe");');
 parts.push('    f.src=movieData.videoUrl;');
 parts.push('    f.allow="autoplay; encrypted-media; picture-in-picture; fullscreen;";');
@@ -693,7 +691,6 @@ parts.push('      });');
 parts.push('    }catch(e){}');
 parts.push('  }');
 parts.push('}');
-
   parts.push('function showVideoError(){ $("videoError").classList.add("show"); $("loadingBox").style.display="none"; }');
   parts.push('function onVideoEnded(){ if(!nextMovie)return; autoNextTarget = nextMovie; autoNextCount = 5; $("anTitle").textContent = "▶ " + nextMovie.title; $("anCount").textContent = autoNextCount; $("autoNextBox").style.display = "flex"; autoNextTimer = setInterval(function(){ autoNextCount--; if(autoNextCount <= 0){ clearInterval(autoNextTimer); playNextNow(); } else { $("anCount").textContent = autoNextCount; } }, 1000); }');
   parts.push('function playNextNow(){ clearInterval(autoNextTimer); if(autoNextTarget) location.href = "/watch?id=" + autoNextTarget.id; }');
