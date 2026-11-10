@@ -1,5 +1,6 @@
 const ADMIN_PASSWORD = "admin123";
 const PAGE_SIZE = 20;
+const ONE_DAY = 24 * 60 * 60 * 1000;
 
 export default {
   async fetch(request, env) {
@@ -21,6 +22,7 @@ export default {
     if (p === "/api/fetch-source" && request.method === "POST") return fetchSourceData(request);
     if (p === "/api/refresh-movie" && request.method === "POST") return refreshMovie(request, env);
     if (p === "/api/refresh-all" && request.method === "POST") return refreshAll(request, env);
+    if (p === "/api/auto-content" && request.method === "POST") return autoContent(request, env);
     if (p === "/api/movies/related" && request.method === "GET") return getRelatedMovies(env, url);
     if (p === "/api/movies/trending" && request.method === "GET") return getTrendingMovies(env);
     if (p === "/api/movies/track-view" && request.method === "POST") return trackView(request, env);
@@ -34,6 +36,50 @@ export default {
     return new Response("404", { status: 404 });
   }
 };
+
+// ================= AUTO-CONTENT (দিনে ১ বার) =================
+async function autoContent(request, env) {
+  try {
+    const b = await request.json();
+    if (!b.id) return json({ error: "ID required" }, 400);
+    const raw = await env.MOVIES.get("movie_list");
+    const list = raw ? JSON.parse(raw) : [];
+    const idx = list.findIndex(m => m.id === b.id);
+    if (idx === -1) return json({ error: "Not found" }, 404);
+
+    const movie = list[idx];
+    const fresh = (Date.now() - (movie.lastRefresh || 0)) < ONE_DAY;
+
+    // আজ refresh হয়েছে → cached
+    if (movie.contentUrl && fresh) {
+      return json({ success: true, contentUrl: movie.contentUrl, cached: true });
+    }
+
+    // নতুন করে বের করি
+    const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
+    if (!embedUrl) {
+      if (movie.contentUrl) return json({ success: true, contentUrl: movie.contentUrl, cached: true });
+      return json({ error: "No embedUrl" }, 400);
+    }
+
+    const freshData = await fetchFreshFromEmbed(embedUrl);
+    if (freshData.contentUrl) {
+      list[idx].contentUrl = freshData.contentUrl;
+      list[idx].videoUrl = freshData.contentUrl;
+      list[idx].lastRefresh = Date.now();
+      if (freshData.title) list[idx].title = freshData.title;
+      if (freshData.thumbnail) list[idx].thumbnail = freshData.thumbnail;
+      await env.MOVIES.put("movie_list", JSON.stringify(list));
+      return json({ success: true, contentUrl: freshData.contentUrl, cached: false });
+    }
+
+    // নতুন না পেলে পুরনো
+    if (movie.contentUrl) {
+      return json({ success: true, contentUrl: movie.contentUrl, cached: true, stale: true });
+    }
+    return json({ error: "Could not extract contentUrl" }, 502);
+  } catch (e) { return json({ error: e.message }, 500); }
+}
 
 // ================= DEBUG =================
 async function debugEmbed(url) {
@@ -49,31 +95,40 @@ async function debugEmbed(url) {
   try {
     const res = await fetch(embedUrl, { headers, redirect: "follow" });
     const text = await res.text();
+    const urls = (text.match(/https?:\/\/[^\s'"<>]+/g) || []).slice(0, 30);
     result.attempts.push({
       method: "direct", status: res.status, length: text.length,
+      isRateLimit: /RateLimitTriggeredError|rate limit/i.test(text),
+      setVideoLike: text.match(/setVideoUrl\w*[^;]{0,300}/gi) || [],
+      allUrls: urls,
       hasSetVideoUrlHigh: /setVideoUrlHigh/i.test(text),
-      hasSetVideoUrl: /setVideoUrl/i.test(text),
       hasContentUrl: /contentUrl/i.test(text),
+      hasMp4: /\.mp4/i.test(text),
+      hasM3u8: /\.m3u8/i.test(text),
       hasSecure: /secure=/i.test(text),
-      preview: text.slice(0, 1500)
+      preview: text.slice(0, 800)
     });
   } catch (e) { result.attempts.push({ method: "direct", error: e.message }); }
   try {
-    const j = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain" } });
+    const j = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "html" } });
     const text = await j.text();
+    const urls = (text.match(/https?:\/\/[^\s'"<>]+/g) || []).slice(0, 30);
     result.attempts.push({
-      method: "jina", status: j.status, length: text.length,
+      method: "jina-html", status: j.status, length: text.length,
+      setVideoLike: text.match(/setVideoUrl\w*[^;]{0,300}/gi) || [],
+      allUrls: urls,
       hasSetVideoUrlHigh: /setVideoUrlHigh/i.test(text),
-      hasSetVideoUrl: /setVideoUrl/i.test(text),
       hasContentUrl: /contentUrl/i.test(text),
+      hasMp4: /\.mp4/i.test(text),
+      hasM3u8: /\.m3u8/i.test(text),
       hasSecure: /secure=/i.test(text),
-      preview: text.slice(0, 1500)
+      preview: text.slice(0, 800)
     });
-  } catch (e) { result.attempts.push({ method: "jina", error: e.message }); }
+  } catch (e) { result.attempts.push({ method: "jina-html", error: e.message }); }
   return json(result);
 }
 
-// ================= UPDATE CONTENT (public, from watch page) =================
+// ================= UPDATE CONTENT (from watch page, no auth) =================
 async function updateContent(request, env) {
   try {
     const b = await request.json();
@@ -102,7 +157,7 @@ async function refreshMovie(request, env) {
   if (idx === -1) return json({ error: "Not found" }, 404);
   const movie = list[idx];
   const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
-  if (!embedUrl) return json({ error: "embedUrl নেই। Edit করে embedframe লিংক দিন।" }, 400);
+  if (!embedUrl) return json({ error: "embedUrl নেই" }, 400);
   try {
     const fresh = await fetchFreshFromEmbed(embedUrl);
     if (!fresh.contentUrl) return json({ error: "নতুন contentUrl পাওয়া যায়নি।" }, 502);
@@ -128,9 +183,8 @@ async function refreshAll(request, env) {
   for (let i = 0; i < list.length; i++) {
     const movie = list[i];
     const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
-    if (!embedUrl) {
-      fail++; failures.push({ id: movie.id, title: movie.title, reason: "no embedUrl" });
-    } else {
+    if (!embedUrl) { fail++; failures.push({ id: movie.id, title: movie.title, reason: "no embedUrl" }); }
+    else {
       try {
         const fresh = await fetchFreshFromEmbed(embedUrl);
         if (fresh.contentUrl) {
@@ -144,18 +198,13 @@ async function refreshAll(request, env) {
         } else { fail++; failures.push({ id: movie.id, title: movie.title, reason: "no contentUrl" }); }
       } catch (e) { fail++; failures.push({ id: movie.id, title: movie.title, reason: e.message }); }
     }
-    if (i < list.length - 1) {
-      const wait = 2000 + Math.floor(Math.random() * 1000);
-      await new Promise(r => setTimeout(r, wait));
-    }
-    if ((i + 1) % 5 === 0 || i === list.length - 1) {
-      await env.MOVIES.put("movie_list", JSON.stringify(list));
-    }
+    if (i < list.length - 1) await new Promise(r => setTimeout(r, 2000 + Math.random() * 1000));
+    if ((i + 1) % 5 === 0 || i === list.length - 1) await env.MOVIES.put("movie_list", JSON.stringify(list));
   }
   return json({ success: true, ok, fail, failures });
 }
 
-// ================= SCRAPE EMBED (JINA-FIRST) =================
+// ================= FETCH EMBED (MULTI-PROXY) =================
 async function fetchFreshFromEmbed(embedUrl) {
   const directHeaders = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
@@ -165,13 +214,30 @@ async function fetchFreshFromEmbed(embedUrl) {
   };
   const out = { contentUrl: "", title: "", thumbnail: "", views: 0, source: "" };
   let text = "";
+
+  // 1) Jina HTML
   try {
-    const j = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "text" } });
-    if (j.ok) {
-      const t = await j.text();
-      if (/setVideoUrl|contentUrl|secure=/i.test(t)) { text = t; out.source = "jina"; }
-    }
+    const j = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "html" } });
+    if (j.ok) { const t = await j.text(); if (/setVideoUrl/i.test(t)) { text = t; out.source = "jina-html"; } }
   } catch (e) {}
+
+  // 2) allorigins
+  if (!text) {
+    try {
+      const p = await fetch("https://api.allorigins.win/raw?url=" + encodeURIComponent(embedUrl));
+      if (p.ok) { const t = await p.text(); if (/setVideoUrl/i.test(t)) { text = t; out.source = "allorigins"; } }
+    } catch (e) {}
+  }
+
+  // 3) corsproxy.io
+  if (!text) {
+    try {
+      const p = await fetch("https://corsproxy.io/?url=" + encodeURIComponent(embedUrl));
+      if (p.ok) { const t = await p.text(); if (/setVideoUrl/i.test(t)) { text = t; out.source = "corsproxy"; } }
+    } catch (e) {}
+  }
+
+  // 4) Direct fallback
   if (!text) {
     try {
       const res = await fetch(embedUrl, { headers: directHeaders, redirect: "follow" });
@@ -181,18 +247,27 @@ async function fetchFreshFromEmbed(embedUrl) {
       }
     } catch (e) {}
   }
+
   if (!text) return out;
+
+  // ============ EXTRACT ============
   let m = text.match(/setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]/i);
   if (m) out.contentUrl = m[1];
-  if (!out.contentUrl) { m = text.match(/setVideoUrl(?:Low)?\s*\(\s*['"]([^'"]+)['"]/i); if (m) out.contentUrl = m[1]; }
+  if (!out.contentUrl) { m = text.match(/setVideoUrlLow\s*\(\s*['"]([^'"]+)['"]/i); if (m) out.contentUrl = m[1]; }
+  if (!out.contentUrl) { m = text.match(/setVideoUrl\s*\(\s*['"]([^'"]+)['"]/i); if (m) out.contentUrl = m[1]; }
   if (!out.contentUrl) { m = text.match(/"contentUrl"\s*:\s*"([^"]+)"/i); if (m) out.contentUrl = m[1]; }
-  if (!out.contentUrl) { m = text.match(/['"](https?:\/\/[^'"]+\.mp4\?secure=[^'"]+)['"]/i); if (m) out.contentUrl = m[1]; }
-  if (!out.contentUrl) { m = text.match(/['"](https?:\/\/[^'"\s]+secure=[^'"\s]+)['"]/i); if (m) out.contentUrl = m[1]; }
-  if (out.contentUrl) out.contentUrl = out.contentUrl.replace(/&amp;/g, "&").replace(/\\\//g, "/");
+  if (!out.contentUrl) { m = text.match(/(https?:\/\/[^'"\s]+\.(?:mp4|m3u8)[^'"\s]*)/i); if (m) out.contentUrl = m[1]; }
+
+  if (out.contentUrl) {
+    out.contentUrl = out.contentUrl
+      .replace(/\\\//g, "/").replace(/\\u0026/g, "&").replace(/&amp;/g, "&").replace(/\\/g, "");
+  }
+
   m = text.match(/"name"\s*:\s*"([^"]+)"/i); if (m) out.title = m[1];
   m = text.match(/"thumbnailUrl"\s*:\s*\[\s*"([^"]+)"/i) || text.match(/"thumbnailUrl"\s*:\s*"([^"]+)"/i);
   if (m) out.thumbnail = m[1].replace(/&amp;/g, "&");
   m = text.match(/"userInteractionCount"\s*:\s*"?(\d+)"?/i); if (m) out.views = parseInt(m[1], 10) || 0;
+
   return out;
 }
 
@@ -207,77 +282,53 @@ function deriveEmbedUrl(movie) {
   return "";
 }
 
-// ================= FETCH SOURCE =================
+// ================= FETCH SOURCE (Auto Extract from URL) =================
 async function fetchSourceData(request) {
   try {
     const body = await request.json();
     const targetUrl = body.url;
     if (!targetUrl) return json({ error: "URL required" }, 400);
-    let htmlText = "";
+    const fresh = await fetchFreshFromEmbed(targetUrl);
+    // embedUrl বের করি
+    let embedUrl = "";
+    let text = "";
     try {
-      const j = await fetch("https://r.jina.ai/" + targetUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "text" } });
-      if (j.ok) {
-        const t = await j.text();
-        if (/setVideoUrl|contentUrl|secure=/i.test(t)) htmlText = t;
-      }
+      const j = await fetch("https://r.jina.ai/" + targetUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "html" } });
+      if (j.ok) text = await j.text();
     } catch (e) {}
-    if (!htmlText) {
+    if (!text) {
       try {
-        const res = await fetch(targetUrl, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Referer": "https://expmle.com/"
-          }
-        });
-        if (res.ok) {
-          const t = await res.text();
-          if (!/RateLimitTriggeredError/i.test(t) || t.length > 2000) htmlText = t;
-        }
+        const p = await fetch("https://api.allorigins.win/raw?url=" + encodeURIComponent(targetUrl));
+        if (p.ok) text = await p.text();
       } catch (e) {}
     }
-    if (!htmlText) return json({ error: "পেজ লোড হয়নি — rate limit বা ব্লক। View Source পেস্ট করুন।" }, 400);
-    const getJson = (key) => {
-      let m = htmlText.match(new RegExp('"' + key + '"\\s*:\\s*"([^"]+)"', "i"));
-      if (m) return m[1];
-      m = htmlText.match(new RegExp(key + "\\s*:\\s*['\"]([^'\"]+)['\"]", "i"));
-      return m ? m[1] : "";
-    };
-    let contentUrl = "";
-    let m = htmlText.match(/setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]/i); if (m) contentUrl = m[1];
-    if (!contentUrl) { m = htmlText.match(/setVideoUrl(?:Low)?\s*\(\s*['"]([^'"]+)['"]/i); if (m) contentUrl = m[1]; }
-    if (!contentUrl) { m = htmlText.match(/"contentUrl"\s*:\s*"([^"]+)"/i); if (m) contentUrl = m[1]; }
-    if (!contentUrl) { m = htmlText.match(/['"](https?:\/\/[^'"]+\.mp4\?secure=[^'"]+)['"]/i); if (m) contentUrl = m[1]; }
-    if (!contentUrl) { m = htmlText.match(/['"](https?:\/\/[^'"\s]+secure=[^'"\s]+)['"]/i); if (m) contentUrl = m[1]; }
-    if (contentUrl) contentUrl = contentUrl.replace(/&amp;/g, "&").replace(/\\\//g, "/");
-    let title = "";
-    m = htmlText.match(/<meta[^>]*name\s*=\s*["']description["'][^>]*content\s*=\s*["']([^"']+)["']/i);
-    if (!m) m = htmlText.match(/<meta[^>]*content\s*=\s*["']([^"']+)["'][^>]*name\s*=\s*["']description["']/i);
-    if (m) title = m[1].trim();
-    if (!title) title = getJson("name");
-    let thumbnail = "";
-    const tArr = htmlText.match(/"thumbnailUrl"\s*:\s*\[\s*"([^"]+)"/i);
-    if (tArr) thumbnail = tArr[1];
-    if (!thumbnail) thumbnail = getJson("thumbnailUrl");
-    if (thumbnail) thumbnail = thumbnail.replace(/&amp;/g, "&");
-    let views = 0;
-    const vm = htmlText.match(/"userInteractionCount"\s*:\s*"?(\d+)"?/i);
-    if (vm) views = parseInt(vm[1], 10) || 0;
-    let embedUrl = "";
-    const iframes = htmlText.match(/<iframe[\s\S]*?>/gi) || [];
+    const iframes = text.match(/<iframe[\s\S]*?>/gi) || [];
     for (let i = 0; i < iframes.length; i++) {
       const tag = iframes[i];
       if (!/embedframe/i.test(tag) && i > 0) continue;
       const sm = tag.match(/src\s*=\s*["']([^"']+)["']/i);
       if (sm) { embedUrl = sm[1]; break; }
     }
-    if (!embedUrl) { const d = htmlText.match(/https?:\/\/[^"'\s<>]*embedframe\/[a-zA-Z0-9]+/i); if (d) embedUrl = d[0]; }
+    if (!embedUrl) { const d = text.match(/https?:\/\/[^"'\s<>]*embedframe\/[a-zA-Z0-9]+/i); if (d) embedUrl = d[0]; }
     if (embedUrl) embedUrl = embedUrl.replace(/&amp;/g, "&");
+
     let videoId = "";
     if (embedUrl) { const em = embedUrl.match(/embedframe\/([a-zA-Z0-9]+)/); if (em) videoId = em[1]; }
-    if (!contentUrl && !embedUrl) return json({ error: "contentUrl বা embed iframe পাওয়া যায়নি" }, 400);
-    return json({ success: true, data: { title, id: videoId, thumbnail, contentUrl, embedUrl, views, videoUrl: contentUrl || embedUrl } });
+
+    if (!fresh.contentUrl && !embedUrl) return json({ error: "contentUrl বা embed iframe পাওয়া যায়নি" }, 400);
+
+    return json({
+      success: true,
+      data: {
+        title: fresh.title || "",
+        id: videoId,
+        thumbnail: fresh.thumbnail || "",
+        contentUrl: fresh.contentUrl || "",
+        embedUrl: embedUrl || "",
+        views: fresh.views || 0,
+        videoUrl: fresh.contentUrl || embedUrl
+      }
+    });
   } catch (err) { return json({ error: "Scraping failed: " + err.message }, 500); }
 }
 
@@ -587,7 +638,7 @@ function watchPage(id) {
   p.push('<div class="player-wrap" id="playerWrap">');
   p.push('  <div class="loader-box" id="loadingBox"><div class="spinner"></div><div class="loader-text" id="loaderText">Loading Video...</div></div>');
   p.push('  <div class="player" id="pb" style="display:none;"></div>');
-  p.push('  <div class="video-error" id="videoError"><h3>⚠️ Video Not Loading</h3><p>This video might be expired. Try reloading, or pick another video below.</p><button onclick="location.reload()">🔄 Reload Page</button></div>');
+  p.push('  <div class="video-error" id="videoError"><h3>⚠️ Video Not Loading</h3><p>This video might be expired. Try reloading or pick another.</p><button onclick="location.reload()">🔄 Reload Page</button></div>');
   p.push('</div>');
   p.push('<div class="title" id="t">Loading...</div>');
   p.push('<div class="meta" id="metaBar"></div>');
@@ -611,24 +662,6 @@ function watchPage(id) {
   p.push('function toggleFav(id){var a=getFavs();var s=String(id);var i=a.indexOf(s);if(i===-1)a.push(s);else a.splice(i,1);localStorage.setItem("fav_ids",JSON.stringify(a));return i===-1}');
   p.push('var id=new URLSearchParams(location.search).get("id");');
   p.push('var movieData=null,relatedList=[];');
-  p.push('async function fetchContentFromBrowser(embedUrl){');
-  p.push('  try{');
-  p.push('    var r = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "text" } });');
-  p.push('    if(!r.ok) return null;');
-  p.push('    var t = await r.text();');
-  p.push('    return extractContentUrl(t);');
-  p.push('  } catch(e){ return null; }');
-  p.push('}');
-  p.push('function extractContentUrl(text){');
-  p.push('  if(!text) return null;');
-  p.push('  var m = text.match(/setVideoUrlHigh\\s*\\(\\s*[\'"]([^\'"]+)[\'"]/i);');
-  p.push('  if(!m) m = text.match(/setVideoUrl(?:Low)?\\s*\\(\\s*[\'"]([^\'"]+)[\'"]/i);');
-  p.push('  if(!m) m = text.match(/"contentUrl"\\s*:\\s*"([^"]+)"/i);');
-  p.push('  if(!m) m = text.match(/[\'"](https?:\\/\\/[^\'"]+\\.mp4\\?secure=[^\'"]+)[\'"]/i);');
-  p.push('  if(!m) m = text.match(/[\'"](https?:\\/\\/[^\'"\\s]+secure=[^\'"\\s]+)[\'"]/i);');
-  p.push('  if(!m) return null;');
-  p.push('  return m[1].replace(/&amp;/g,"&").replace(/\\\\\\//g,"/");');
-  p.push('}');
   p.push('async function loadData(){if(!id){$("t").textContent="No ID";return}try{var r=await fetch("/api/movie?id="+id);if(!r.ok)throw new Error("Not found");var d=await r.json();movieData=d.movie;document.title=movieData.title;$("t").textContent=movieData.title;renderMeta();renderActions();markWatched(movieData.id);playVideo();loadRelated();loadTrending()}catch(e){$("t").textContent="Video Not Found";$("loadingBox").style.display="none";$("videoError").classList.add("show")}}');
   p.push('function trackView(){if(!movieData)return;fetch("/api/movies/track-view",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:movieData.id})}).then(function(r){return r.json()}).then(function(d){if(d.success&&d.views){movieData.views=d.views;renderMeta()}}).catch(function(){})}');
   p.push('function renderMeta(){if(!movieData)return;var v=movieData.views||0;$("metaBar").innerHTML=\'<span class="views">👁️ \'+fmt(v)+\' views</span>\'}');
@@ -642,20 +675,24 @@ function watchPage(id) {
   p.push('  $("pb").style.display="block";');
   p.push('  $("videoError").classList.remove("show");');
   p.push('  $("loadingBox").style.display="flex";');
-  p.push('  var embedUrl = movieData.embedUrl || "";');
+  p.push('  $("loaderText").textContent="Loading video...";');
   p.push('  var contentUrl = movieData.contentUrl || "";');
-  p.push('  if(contentUrl){$("loaderText").textContent="Loading video...";playContent(contentUrl);return;}');
-  p.push('  if(embedUrl){');
-  p.push('    $("loaderText").textContent="Preparing video (first time may take a moment)...";');
-  p.push('    var fresh = await fetchContentFromBrowser(embedUrl);');
-  p.push('    if(fresh){movieData.contentUrl = fresh;playContent(fresh);try{fetch("/api/movies/update-content",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:movieData.id,contentUrl:fresh})})}catch(e){}return;}');
-  p.push('  }');
-  p.push('  $("loaderText").textContent="Trying backup...";');
+  p.push('  var lastRefresh = movieData.lastRefresh || 0;');
+  p.push('  var ONE_DAY = 24*60*60*1000;');
+  p.push('  var isFresh = (Date.now() - lastRefresh) < ONE_DAY;');
+  p.push('  if(contentUrl && isFresh){ playContent(contentUrl); return; }');
+  p.push('  $("loaderText").textContent="Preparing video...";');
   p.push('  try{');
-  p.push('    var r=await fetch("/api/refresh-movie",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:movieData.id})});');
+  p.push('    var r=await fetch("/api/auto-content",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:movieData.id})});');
   p.push('    var d=await r.json();');
-  p.push('    if(r.ok && d.movie && d.movie.contentUrl){movieData.contentUrl = d.movie.contentUrl;playContent(d.movie.contentUrl);return;}');
+  p.push('    if(r.ok && d.contentUrl){');
+  p.push('      movieData.contentUrl = d.contentUrl;');
+  p.push('      movieData.lastRefresh = Date.now();');
+  p.push('      playContent(d.contentUrl);');
+  p.push('      return;');
+  p.push('    }');
   p.push('  }catch(e){}');
+  p.push('  if(contentUrl){ playContent(contentUrl); return; }');
   p.push('  showVideoError();');
   p.push('}');
   p.push('function playContent(url){');
@@ -727,17 +764,17 @@ function adminPage() {
   p.push('<div class="tabs"><button id="t1" class="active" data-tab="m">Movies</button><button id="t2" data-tab="ad">Ad Code</button><button id="t3" data-tab="il">Interval Link</button></div>');
   p.push('<div id="tm">');
   p.push('<div class="card paste-box"><h2 style="color:#00c853;margin-bottom:10px">📋 Paste View Source (Ctrl+U)</h2><p class="hint" style="margin-bottom:10px;color:#aaddff">1) ভিডিও পেজ খুলুন → <code>Ctrl+U</code> → <code>Ctrl+A</code> → <code>Ctrl+C</code><br>2) নিচে পেস্ট → <b>Extract & Fill</b><br>3) সব ফিল্ড অটো ভরে যাবে</p><textarea id="viewSource" placeholder="এখানে পুরো View Source কোড পেস্ট করুন..." style="min-height:150px"></textarea><button class="primary" style="background:#00c853;margin-top:10px" id="parseSourceBtn">🔍 Extract & Fill</button><div id="psm" class="msg" style="margin-top:10px"></div></div>');
-  p.push('<div class="card auto-box"><h2 style="color:#fff;margin-bottom:10px">⚡ Auto Extract from URL</h2><p class="hint" style="margin-bottom:10px">URL দিলে সার্ভার নিজে source আনবে। সাইট ব্লক করলে উপরের Paste View Source ব্যবহার করুন।</p><input type="text" id="scrapeUrl" placeholder="https://expmle.com/video-page"><button class="primary" style="background:#ff9800;margin-top:10px" id="scrapeBtn">Auto Extract</button><div id="sm" class="msg" style="margin-top:10px"></div></div>');
+  p.push('<div class="card auto-box"><h2 style="color:#fff;margin-bottom:10px">⚡ Auto Extract from URL</h2><p class="hint" style="margin-bottom:10px">URL দিলে সার্ভার নিজে source আনবে।</p><input type="text" id="scrapeUrl" placeholder="https://expmle.com/video-page"><button class="primary" style="background:#ff9800;margin-top:10px" id="scrapeBtn">Auto Extract</button><div id="sm" class="msg" style="margin-top:10px"></div></div>');
   p.push('<div class="card"><h2 id="ft">Add / Edit Movie</h2><input type="hidden" id="eid"><input type="hidden" id="videoIdField">');
   p.push('<label>Title</label><input type="text" id="title">');
-  p.push('<label>Embed URL (expmle.com/embedframe/xxx) — refresh এর জন্য</label><input type="text" id="embedUrl">');
-  p.push('<label>Content URL (play link, refresh এ auto update হয়)</label><input type="text" id="contentUrl">');
+  p.push('<label>Embed URL (expmle.com/embedframe/xxx)</label><input type="text" id="embedUrl">');
+  p.push('<label>Content URL (auto-refreshed)</label><input type="text" id="contentUrl">');
   p.push('<label>Thumbnail URL</label><input type="text" id="thumb">');
-  p.push('<label>Video URL / Embed (পুরনো ফিল্ড, খালি রাখলেও চলবে)</label><textarea id="vurl"></textarea>');
+  p.push('<label>Video URL / Embed</label><textarea id="vurl"></textarea>');
   p.push('<button class="primary" id="sb">Add Movie</button><button class="primary hidden" style="background:#333" id="cb" type="button">Cancel</button><div id="am" class="msg"></div></div>');
   p.push('<div class="card"><h2>All Movies</h2><div id="list"></div></div></div>');
-  p.push('<div id="tad" class="hidden"><div class="card"><h2>Ad Code</h2><p class="hint">Home ও Watch পেজে দেখাবে।</p><textarea id="ads" style="min-height:200px"></textarea><button class="primary" id="adsSaveBtn">Save</button><div id="adm" class="msg"></div></div></div>');
-  p.push('<div id="til" class="hidden"><div class="card"><h2>Interval Link</h2><p class="hint">ভিডিও চালানোর আগে ৫ সেকেন্ড দেখাবে।</p><label>URL</label><input type="text" id="intervalLinkInput" placeholder="https://..."><button class="primary" id="intervalLinkSaveBtn">Save</button><div id="ilm" class="msg"></div></div></div>');
+  p.push('<div id="tad" class="hidden"><div class="card"><h2>Ad Code</h2><textarea id="ads" style="min-height:200px"></textarea><button class="primary" id="adsSaveBtn">Save</button><div id="adm" class="msg"></div></div></div>');
+  p.push('<div id="til" class="hidden"><div class="card"><h2>Interval Link</h2><label>URL</label><input type="text" id="intervalLinkInput" placeholder="https://..."><button class="primary" id="intervalLinkSaveBtn">Save</button><div id="ilm" class="msg"></div></div></div>');
   p.push('<button class="primary danger" id="logoutBtn">Logout</button>');
   p.push('</div></div>');
   p.push('<script>');
@@ -766,7 +803,7 @@ function adminPage() {
   p.push('function parseViewSource(){');
   p.push('  var text=$("viewSource").value;');
   p.push('  var m=$("psm");');
-  p.push('  if(!text||!text.trim()){m.textContent="আগে View Source কোড পেস্ট করুন";m.className="msg err show";return}');
+  p.push('  if(!text||!text.trim()){m.textContent="আগে View Source পেস্ট করুন";m.className="msg err show";return}');
   p.push('  var found=[];');
   p.push('  var title="";');
   p.push('  var tm=text.match(/<meta[^>]*name\\s*=\\s*["\']description["\'][^>]*content\\s*=\\s*["\']([^"\']+)["\']/i);');
@@ -784,15 +821,14 @@ function adminPage() {
   p.push('  if(embedUrl){embedUrl=embedUrl.replace(/&amp;/g,"&");found.push("Embed URL")}');
   p.push('  var contentUrl="";');
   p.push('  var cm=text.match(/setVideoUrlHigh\\s*\\(\\s*[\'"]([^\'"]+)[\'"]/i);');
-  p.push('  if(!cm)cm=text.match(/setVideoUrl(?:Low)?\\s*\\(\\s*[\'"]([^\'"]+)[\'"]/i);');
+  p.push('  if(!cm)cm=text.match(/setVideoUrlLow\\s*\\(\\s*[\'"]([^\'"]+)[\'"]/i);');
+  p.push('  if(!cm)cm=text.match(/setVideoUrl\\s*\\(\\s*[\'"]([^\'"]+)[\'"]/i);');
   p.push('  if(!cm)cm=text.match(/"contentUrl"\\s*:\\s*"([^"]+)"/i);');
-  p.push('  if(!cm)cm=text.match(/[\'"](https?:\\/\\/[^\'"]+\\.mp4\\?secure=[^\'"]+)[\'"]/i);');
-  p.push('  if(!cm)cm=text.match(/[\'"](https?:\\/\\/[^\'"\\s]+secure=[^\'"\\s]+)[\'"]/i);');
+  p.push('  if(!cm)cm=text.match(/(https?:\\/\\/[^\'"\\s]+\\.(?:mp4|m3u8)[^\'"\\s]*)/i);');
   p.push('  if(cm){contentUrl=cm[1].replace(/&amp;/g,"&").replace(/\\\\\\//g,"/");found.push("Content URL")}');
   p.push('  var thumb="";');
   p.push('  var thm=text.match(/"thumbnailUrl"\\s*:\\s*\\[\\s*"([^"]+)"/i);');
   p.push('  if(!thm)thm=text.match(/"thumbnailUrl"\\s*:\\s*"([^"]+)"/i);');
-  p.push('  if(!thm)thm=text.match(/"preview_url\\d*"\\s*:\\s*"([^"]+)"/i);');
   p.push('  if(thm){thumb=thm[1].replace(/&amp;/g,"&");found.push("Thumbnail")}');
   p.push('  var vid="";');
   p.push('  if(embedUrl){var vm=embedUrl.match(/embedframe\\/([a-zA-Z0-9]+)/);if(vm)vid=vm[1]}');
@@ -807,7 +843,7 @@ function adminPage() {
   p.push('    m.className="msg ok show";m.style.color="#b6ffb6";');
   p.push('    window.scrollTo({top:document.querySelector("#ft").offsetTop-50,behavior:"smooth"});');
   p.push('  }else{');
-  p.push('    m.innerHTML="❌ কিছু পাওয়া যায়নি।<br>Title: <code>&lt;meta name=\\"description\\" content=\\"...\\"&gt;</code><br>Content: <code>setVideoUrlHigh(\'...\')</code><br>Embed: <code>&lt;iframe src=\\"...embedframe/xxx\\"&gt;</code>";');
+  p.push('    m.innerHTML="❌ কিছু পাওয়া যায়নি।";');
   p.push('    m.className="msg err show";m.style.color="#ffb6b6";');
   p.push('  }');
   p.push('}');
@@ -817,7 +853,7 @@ function adminPage() {
   p.push('  var eid=$("eid").value;var title=$("title").value.trim();var embedUrl=$("embedUrl").value.trim();');
   p.push('  var contentUrl=$("contentUrl").value.trim();var thumb=$("thumb").value.trim();');
   p.push('  var vurl=$("vurl").value.trim();var vid=$("videoIdField").value.trim();var m=$("am");');
-  p.push('  if(!title||(!vurl&&!contentUrl&&!embedUrl)){m.textContent="Title ও অন্তত একটা URL দরকার";m.className="msg err show";return}');
+  p.push('  if(!title||(!vurl&&!contentUrl&&!embedUrl)){m.textContent="Title ও URL দরকার";m.className="msg err show";return}');
   p.push('  var u=eid?"/api/movies/update":"/api/movies";');
   p.push('  var body={title:title,embedUrl:embedUrl,contentUrl:contentUrl,thumbnail:thumb,videoUrl:vurl};');
   p.push('  if(eid)body.id=eid;if(!eid&&vid)body.videoId=vid;');
@@ -828,7 +864,7 @@ function adminPage() {
   p.push('  }catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}');
   p.push('}');
   p.push('async function refreshOne(id,btn){btn.disabled=true;var old=btn.textContent;btn.textContent="⏳";try{var r=await fetch("/api/refresh-movie",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({id:id})});var d=await r.json();if(r.ok){btn.textContent="✓"}else{btn.textContent="✗";alert(d.error||"Failed")}}catch(e){btn.textContent="✗";alert(e.message)}setTimeout(function(){btn.textContent=old;btn.disabled=false},1500)}');
-  p.push('async function refreshAllBtn(){if(!confirm("সব ভিডিওর contentUrl refresh করবে? (২-৩ সেকেন্ড পর পর — সময় লাগবে)"))return;var b=$("refreshAllTop");if(b){b.disabled=true;b.textContent="⏳ Refreshing..."}try{var r=await fetch("/api/refresh-all",{method:"POST",headers:{"X-Admin-Password":token}});var d=await r.json();if(r.ok){var msg="OK: "+d.ok+"  Fail: "+d.fail;if(d.failures&&d.failures.length){msg+="\\n\\nপ্রথম ১০টা ব্যর্থ:\\n"+d.failures.slice(0,10).map(function(f){return "• "+f.title+": "+f.reason}).join("\\n")}alert(msg)}else{alert(d.error||"Failed")}}catch(e){alert(e.message)}if(b){b.disabled=false;b.textContent="🔄 Refresh All"}loadList()}');
+  p.push('async function refreshAllBtn(){if(!confirm("সব ভিডিওর contentUrl refresh করবে? (২-৩ সেকেন্ড পর পর)"))return;var b=$("refreshAllTop");if(b){b.disabled=true;b.textContent="⏳ Refreshing..."}try{var r=await fetch("/api/refresh-all",{method:"POST",headers:{"X-Admin-Password":token}});var d=await r.json();if(r.ok){var msg="OK: "+d.ok+"  Fail: "+d.fail;if(d.failures&&d.failures.length){msg+="\\n\\nপ্রথম ১০টা ব্যর্থ:\\n"+d.failures.slice(0,10).map(function(f){return "• "+f.title+": "+f.reason}).join("\\n")}alert(msg)}else{alert(d.error||"Failed")}}catch(e){alert(e.message)}if(b){b.disabled=false;b.textContent="🔄 Refresh All"}loadList()}');
   p.push('async function loadList(){var pg=1,all=[];while(true){var r=await fetch("/api/movies?page="+pg+"&noshuffle=1");var d=await r.json();all=all.concat(d.items);if(pg>=d.totalPages)break;pg++}var el=$("list");if(!all.length){el.innerHTML=\'<p style="color:#666">No movies</p>\';return}el.innerHTML="";var hdr=document.createElement("div");hdr.style.cssText="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px";hdr.innerHTML=\'<div style="font-size:14px;color:#888">Total: \'+all.length+\'</div>\';var refAll=document.createElement("button");refAll.id="refreshAllTop";refAll.className="primary small";refAll.style.background="#ff9800";refAll.style.marginTop="0";refAll.textContent="🔄 Refresh All";refAll.onclick=refreshAllBtn;hdr.appendChild(refAll);el.appendChild(hdr);all.forEach(function(mv){var s=mv.thumbnail?"background-image:url(\'"+mv.thumbnail+"\')":"";var row=document.createElement("div");row.className="item";var hasC=mv.contentUrl?"✅":"⚠️";var info=document.createElement("div");info.className="info";info.innerHTML=\'<div class="mini" style="\'+s+\'"></div><div><h4>\'+esc(mv.title)+\' \'+hasC+\'</h4><div class="stats">👁 \'+fmt(mv.views||0)+\' • embed: \'+(mv.embedUrl?"✓":"✗")+\'</div></div>\';var acts=document.createElement("div");acts.className="acts";var rb=document.createElement("button");rb.className="primary small";rb.style.background="#ff9800";rb.style.marginTop="0";rb.textContent="🔄 Refresh";rb.onclick=function(){refreshOne(mv.id,rb)};var eb=document.createElement("button");eb.className="primary small";eb.style.marginTop="0";eb.textContent="Edit";eb.onclick=function(){editMovie(mv.id)};var db=document.createElement("button");db.className="primary small danger";db.style.marginTop="0";db.textContent="Delete";db.onclick=function(){delMovie(mv.id)};acts.appendChild(rb);acts.appendChild(eb);acts.appendChild(db);row.appendChild(info);row.appendChild(acts);el.appendChild(row)})}');
   p.push('async function editMovie(id){var pg=1,all=[];while(true){var r=await fetch("/api/movies?page="+pg+"&noshuffle=1");var d=await r.json();all=all.concat(d.items);if(pg>=d.totalPages)break;pg++}var mv=all.find(function(x){return x.id===id});if(!mv)return;$("eid").value=mv.id;$("title").value=mv.title;$("embedUrl").value=mv.embedUrl||"";$("contentUrl").value=mv.contentUrl||"";$("thumb").value=mv.thumbnail||"";$("vurl").value=mv.videoUrl||"";$("videoIdField").value="";$("ft").textContent="Edit Movie";$("sb").textContent="Update";$("cb").classList.remove("hidden");window.scrollTo({top:0,behavior:"smooth"})}');
   p.push('async function delMovie(id){if(!confirm("Delete?"))return;var r=await fetch("/api/movies/"+id,{method:"DELETE",headers:{"X-Admin-Password":token}});if(r.ok)loadList()}');
