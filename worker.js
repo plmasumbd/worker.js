@@ -10,17 +10,8 @@ export default {
     const url = new URL(request.url);
     const p = url.pathname;
 
-    // ⭐ CORS Preflight
     if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, X-Admin-Password",
-          "Access-Control-Max-Age": "86400",
-        },
-      });
+      return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS", "Access-Control-Allow-Headers": "Content-Type, X-Admin-Password", "Access-Control-Max-Age": "86400" } });
     }
 
     if (p === "/api/movies" && request.method === "GET") return listMovies(env, url);
@@ -54,9 +45,6 @@ export default {
   async scheduled(event, env, ctx) { ctx.waitUntil(autoRefreshAll(env)); }
 };
 
-// ═══════════════════════════════════════════════════════════
-// 🔗 URL Expiry
-// ═══════════════════════════════════════════════════════════
 function getUrlExpiry(url) {
   if (!url) return 0;
   const s = String(url);
@@ -79,9 +67,6 @@ function isUrlExpired(url) {
   return Date.now() > (exp - URL_SAFETY_MARGIN);
 }
 
-// ═══════════════════════════════════════════════════════════
-// 🎬 Stream
-// ═══════════════════════════════════════════════════════════
 async function streamVideo(request, env, url) {
   const id = url.searchParams.get("id");
   if (!id) return new Response("ID required", { status: 400 });
@@ -126,10 +111,8 @@ async function streamVideo(request, env, url) {
   const range = request.headers.get("Range");
   const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-    "Accept": "*/*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": refererUrl,
-    "Origin": videoOrigin,
+    "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9",
+    "Referer": refererUrl, "Origin": videoOrigin,
   };
   if (range) headers["Range"] = range;
 
@@ -180,15 +163,10 @@ function guessContentType(url) {
   return "video/mp4";
 }
 
-// ═══════════════════════════════════════════════════════════
-// 🎯 Fetch Fresh
-// ═══════════════════════════════════════════════════════════
 async function fetchFreshFromEmbed(embedUrl) {
   const out = { contentUrl: "", title: "", thumbnail: "", views: 0, source: "" };
   let text = "";
-
   const originRef = (() => { try { return new URL(embedUrl).origin + "/"; } catch (e) { return ""; } })();
-
   const isValid = (t) => {
     if (!t || t.length < 100) return false;
     if (/setVideoUrl(?:High|Low)?\s*\(/i.test(t)) return true;
@@ -220,7 +198,6 @@ async function fetchFreshFromEmbed(embedUrl) {
     return r.ok ? await r.text() : null;
   }, "direct");
   if (!text) return out;
-
   out.contentUrl = extractVideoUrl(text);
   let m = text.match(/<title>([^<]+)<\/title>/i) || text.match(/"name"\s*:\s*"([^"]+)"/i) || text.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)/i);
   if (m) out.title = decodeHtml(m[1]).trim();
@@ -231,9 +208,6 @@ async function fetchFreshFromEmbed(embedUrl) {
   return out;
 }
 
-// ═══════════════════════════════════════════════════════════
-// 🔍 Extractor — setVideoUrlHigh priority
-// ═══════════════════════════════════════════════════════════
 function extractVideoUrl(text) {
   const clean = (u) => String(u || "").replace(/\\\//g, "/").replace(/\\u0026/g, "&").replace(/\\u003d/g, "=").replace(/\\u003f/g, "?").replace(/\\u002f/g, "/").replace(/&amp;/g, "&").replace(/\\/g, "").trim();
   const patterns = [
@@ -274,9 +248,6 @@ function deriveEmbedUrl(movie) {
   return "";
 }
 
-// ═══════════════════════════════════════════════════════════
-// 🐛 Debug
-// ═══════════════════════════════════════════════════════════
 async function debugEmbed(url) {
   const embedUrl = url.searchParams.get("url");
   if (!embedUrl) return json({ error: "url param required" }, 400);
@@ -295,9 +266,6 @@ async function debugEmbed(url) {
   return json(result);
 }
 
-// ═══════════════════════════════════════════════════════════
-// 🔄 Refresh
-// ═══════════════════════════════════════════════════════════
 async function refreshMovie(request, env) {
   const auth = request.headers.get("X-Admin-Password");
   if (auth !== ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
@@ -400,9 +368,6 @@ async function bulkUpdateLinks(request, env) {
   return json({ success: true, ok, fail });
 }
 
-// ═══════════════════════════════════════════════════════════
-// 🤖 Auto Content
-// ═══════════════════════════════════════════════════════════
 async function autoContent(request, env) {
   try {
     const b = await request.json();
@@ -433,9 +398,6 @@ async function autoContent(request, env) {
   } catch (e) { return json({ error: e.message }, 500); }
 }
 
-// ═══════════════════════════════════════════════════════════
-// 🛠 Helpers
-// ═══════════════════════════════════════════════════════════
 async function fetchSourceData(request) {
   try {
     const body = await request.json();
@@ -479,9 +441,6 @@ function hashString(str) { let h = 2166136261; for (let i = 0; i < str.length; i
 function json(d, s) { return new Response(JSON.stringify(d), { status: s || 200, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }); }
 function html(s) { return new Response(s, { headers: { "Content-Type": "text/html; charset=utf-8" } }); }
 
-// ═══════════════════════════════════════════════════════════
-// 📋 List & CRUD
-// ═══════════════════════════════════════════════════════════
 async function listMovies(env, url) {
   const page = parseInt(url.searchParams.get("page") || "1");
   const search = (url.searchParams.get("search") || "").toLowerCase().trim();
@@ -565,9 +524,6 @@ async function deleteMovie(request, env, path) {
   return json({ success: true });
 }
 
-// ═══════════════════════════════════════════════════════════
-// 🔐 Auth / Ads / Interval
-// ═══════════════════════════════════════════════════════════
 async function login(request) { const b = await request.json(); if (b.password === ADMIN_PASSWORD) return json({ success: true, token: ADMIN_PASSWORD }); return json({ error: "ভুল পাসওয়ার্ড" }, 401); }
 async function checkAuth(request) { const a = request.headers.get("X-Admin-Password"); if (a === ADMIN_PASSWORD) return json({ valid: true }); return json({ valid: false }, 401); }
 async function getAds(env) { return json({ code: (await env.MOVIES.get("ads_code")) || "" }); }
@@ -589,9 +545,6 @@ async function saveIntervalLink(request, env) {
   return json({ success: true });
 }
 
-// ═══════════════════════════════════════════════════════════
-// 📄 Single / Related / Trending / View
-// ═══════════════════════════════════════════════════════════
 async function getSingleMovie(env, url) {
   const id = url.searchParams.get("id");
   if (!id) return json({ error: "ID required" }, 400);
@@ -631,9 +584,6 @@ async function trackView(request, env) {
   } catch (e) { return json({ error: e.message }, 500); }
 }
 
-// ═══════════════════════════════════════════════════════════
-// 🏠 Home Page
-// ═══════════════════════════════════════════════════════════
 function homePage() {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AdultMovie</title>
 <style>
@@ -671,9 +621,6 @@ loadAds();load(1);
 </script></body></html>`;
 }
 
-// ═══════════════════════════════════════════════════════════
-// 🎬 Watch Page
-// ═══════════════════════════════════════════════════════════
 function watchPage(id) {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Watch</title>
 <style>
@@ -777,9 +724,6 @@ loadData();
 </script></body></html>`;
 }
 
-// ═══════════════════════════════════════════════════════════
-// 🔐 Admin Page
-// ═══════════════════════════════════════════════════════════
 function adminPage() {
   const P = [];
   P.push('<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin</title>');
@@ -830,7 +774,6 @@ function adminPage() {
   P.push('<button id="t3" data-tab="il">⏱️ Interval</button>');
   P.push('<button id="t4" data-tab="bm">📌 Bookmarklet</button>');
   P.push('</div>');
-
   P.push('<div id="tm">');
   P.push('<div class="card paste-box"><h2 style="color:#00c853;margin-bottom:10px">📋 Paste View Source</h2><p class="hint" style="margin-bottom:10px;color:#aaddff">Video page → Ctrl+U → Ctrl+A → Ctrl+C → paste here</p><textarea id="viewSource" placeholder="Paste View Source here..." style="min-height:150px"></textarea><button class="primary" style="background:#00c853;margin-top:10px" id="parseSourceBtn">🔍 Extract & Fill</button><div id="psm" class="msg" style="margin-top:10px"></div></div>');
   P.push('<div class="card"><h2 id="ft">Add / Edit Movie</h2><input type="hidden" id="eid"><input type="hidden" id="videoIdField">');
@@ -842,9 +785,7 @@ function adminPage() {
   P.push('<button class="primary" id="sb">Add Movie</button><button class="primary hidden" style="background:#333" id="cb" type="button">Cancel</button><div id="am" class="msg"></div></div>');
   P.push('<div class="card"><h2>All Movies</h2><div id="list"></div></div>');
   P.push('</div>');
-
   P.push('<div id="tad" class="hidden"><div class="card"><h2>Ad Code</h2><textarea id="ads" style="min-height:200px" placeholder="Ad script / HTML"></textarea><button class="primary" id="adsSaveBtn">Save</button><div id="adm" class="msg"></div></div></div>');
-
   P.push('<div id="til" class="hidden"><div class="card">');
   P.push('<h2>⏱️ Interval Link</h2><p class="hint" style="color:#aaddff;margin-bottom:16px">Watch page-এ নির্দিষ্ট সময় পর link open</p>');
   P.push('<label>URL</label><input type="text" id="intervalLinkInput" placeholder="https://example.com">');
@@ -853,19 +794,16 @@ function adminPage() {
   P.push('<button class="primary" id="intervalLinkSaveBtn">Save</button>');
   P.push('<div id="ilm" class="msg"></div>');
   P.push('</div></div>');
-
-  // ⭐ BOOKMARKLET TAB — Auto-Save version
   P.push('<div id="tbm" class="hidden"><div class="card">');
-  P.push('<h2>📌 Bookmarklet — 1 Click Auto-Save</h2>');
-  P.push('<p class="hint" style="color:#aaddff;margin-bottom:16px">Server থেকে embed site block। এই bookmarklet আপনার browser থেকে URL বের করে <b style="color:#00c853">auto save</b> করবে। Copy-paste নেই!</p>');
-  P.push('<div class="step"><b>ধাপ ১:</b> নিচের বাটন <b>drag</b> করে bookmarks bar এ ফেলুন (একবারই)</div>');
-  P.push('<div class="bm-display"><a id="bmDrag" href="#" class="bm-btn">🎬 Scrape & Save</a><div class="hint" style="margin-top:8px">উপরে টেনে bookmarks bar এ ফেলুন</div></div>');
-  P.push('<div class="step"><b>ধাপ ২:</b> Admin → Movies → যেকোনো movie এর <b>📌 Open</b> বাটন চাপুন (embed page খুলবে)</div>');
-  P.push('<div class="step"><b>ধাপ ৩:</b> Embed page লোড হওয়ার পর Bookmarks bar থেকে <b>🎬 Scrape & Save</b> এ ক্লিক করুন</div>');
-  P.push('<div class="step"><b>ধাপ ৪:</b> <b style="color:#00c853">✅ Saved!</b> popup আসবে — শেষ! কোনো copy-paste নেই!</div>');
-  P.push('<p class="hint" style="margin-top:20px;color:#ff9800">⚡ <b>দ্রুত পদ্ধতি:</b> ১০টা tab এ ১০টা embed page খুলুন → প্রতিটায় bookmarklet ক্লিক করুন → সব save হয়ে যাবে।</p>');
+  P.push('<h2>📌 Bookmarklet — IP Block Bypass</h2>');
+  P.push('<p class="hint" style="color:#aaddff;margin-bottom:16px">Server থেকে embed site block হলে এই bookmarklet browser থেকে URL বের করে।</p>');
+  P.push('<div class="step"><b>ধাপ ১:</b> নিচের বাটন <b>drag</b> করে bookmarks bar এ ফেলুন</div>');
+  P.push('<div class="bm-display"><a id="bmDrag" href="#" class="bm-btn">🎬 Scrape Video URL</a><div class="hint" style="margin-top:8px">উপরে টেনে bookmarks bar এ ফেলুন</div></div>');
+  P.push('<div class="step"><b>ধাপ ২:</b> যেকোনো embed page খুলুন (যেমন: <code style="background:#000;padding:2px 6px">https://www.example.com/embedframe/xxx</code>)</div>');
+  P.push('<div class="step"><b>ধাপ ৩:</b> Bookmarks bar থেকে <b>🎬 Scrape Video URL</b> এ ক্লিক করুন</div>');
+  P.push('<div class="step"><b>ধাপ ৪:</b> Video URL popup এ আসবে → Ctrl+C</div>');
+  P.push('<div class="step"><b>ধাপ ৫:</b> Admin → Edit → Content URL paste → Update</div>');
   P.push('</div></div>');
-
   P.push('<button class="primary danger" id="logoutBtn">Logout</button>');
   P.push('</div></div>');
 
@@ -874,30 +812,10 @@ function adminPage() {
   P.push('function $(i){return document.getElementById(i)}');
   P.push('function esc(s){return String(s).replace(/[&<>]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;"}[c]})}');
   P.push('function fmt(n){n=parseInt(n)||0;if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1e3)return(n/1e3).toFixed(1)+"K";return n}');
-  P.push('function toast(msg,type){var t=$("toast");t.textContent=msg;t.className="toast show"+(type==="err"?" err":"");setTimeout(function(){t.classList.remove("show")},3000)}');
+  P.push('function toast(msg,type){var t=$("toast");t.textContent=msg;t.className="toast show"+(type==="err"?" err":"");setTimeout(function(){t.classList.remove("show")},2500)}');
 
-  // ⭐ AUTO-SAVE BOOKMARKLET
   P.push('function setupBookmarklet(){');
-  P.push('  var workerUrl=location.origin;');
-  P.push('  var adminPass=token||localStorage.getItem("admin_token")||"";');
-  P.push('  var parts=[];');
-  P.push('  parts.push("javascript:(function(){");');
-  P.push('  parts.push("var h=document.documentElement.innerHTML;");');
-  P.push('  parts.push("var m=h.match(/setVideoUrlHigh\\\\s*\\\\(\\\\s*[\\x27\\"]([^\\x27\\"]+)/i);");');
-  P.push('  parts.push("if(!m)m=h.match(/setVideoUrlLow\\\\s*\\\\(\\\\s*[\\x27\\"]([^\\x27\\"]+)/i);");');
-  P.push('  parts.push("if(!m)m=h.match(/setVideoUrl\\\\s*\\\\(\\\\s*[\\x27\\"]([^\\x27\\"]+)/i);");');
-  P.push('  parts.push("if(!m)m=h.match(/(https?:\\\\/\\\\/[^\\"\\\\s<>]+\\\\.mp4[^\\"\\\\s<>]*)/i);");');
-  P.push('  parts.push("if(!m){alert(\\"❌ No video URL found in HTML\\");return}");');
-  P.push('  parts.push("var u=m[1].replace(/\\\\\\\\\\\\\\\\\\\\//g,\\"/\\").replace(/&amp;/g,\\"&\\").replace(/\\\\\\\\/g,\\"\\");");');
-  P.push('  parts.push("var im=location.pathname.match(/\\\\/([a-zA-Z0-9\\\\-]+)\\\\/?$/);");');
-  P.push('  parts.push("var vid=im?im[1]:null;");');
-  P.push('  parts.push("if(!vid){alert(\\"❌ Can not extract video ID from: \\"+location.pathname);return}");');
-  P.push('  parts.push("fetch(\\"'+workerUrl+'/api/refresh-movie\\",{method:\\"POST\\",headers:{\\"Content-Type\\":\\"application/json\\",\\"X-Admin-Password\\":\\"'+adminPass+'\\"},body:JSON.stringify({id:vid,videoUrl:u})})");');
-  P.push('  parts.push(".then(function(r){return r.json()})");');
-  P.push('  parts.push(".then(function(d){if(d.success){document.body.style.outline=\\"5px solid #00c853\\";document.body.style.outlineOffset=\\"-5px\\";setTimeout(function(){document.body.style.outline=\\"\\"},1500);alert(\\"✅ Saved: \\"+vid)}else{alert(\\"❌ \\"+(d.error||\\"Failed\\"))}})");');
-  P.push('  parts.push(".catch(function(e){alert(\\"❌ Network: \\"+e.message)})");');
-  P.push('  parts.push("})();");');
-  P.push('  var bkm=parts.join("");');
+  P.push('  var bkm="javascript:(function(){try{var h=document.documentElement.innerHTML;var ps=[/setVideoUrlHigh\\\\s*\\\\(\\\\s*[\\x27\\"]([^\\x27\\"]+)/i,/setVideoUrlLow\\\\s*\\\\(\\\\s*[\\x27\\"]([^\\x27\\"]+)/i,/setVideoUrl\\\\s*\\\\(\\\\s*[\\x27\\"]([^\\x27\\"]+)/i,/\\"contentUrl\\"\\\\s*:\\\\s*\\"([^\\"]+)\\"/i,/(https?:\\\\/\\\\/[^\\"\\\\s<>]+\\\\.mp4[^\\"\\\\s<>]*)/i,/(https?:\\\\/\\\\/[^\\"\\\\s<>]+\\\\.m3u8[^\\"\\\\s<>]*)/i];var u=null;for(var i=0;i<ps.length;i++){var m=h.match(ps[i]);if(m&&m[1]){u=m[1].replace(/\\\\\\\\\\\\//g,\\"/\\").replace(/&amp;/g,\\"&\\").replace(/\\\\\\\\/g,\\"\\");break}}if(u){var w=window.open(\\"\\",\\"_blank\\",\\"width=700,height=250\\");w.document.write(\\"<html><body style=\\\\\\"background:#1c1c1c;color:#fff;font-family:monospace;padding:20px\\\\\\"><h3 style=\\\\\\"color:#00c853\\\\\\">✅ Video URL Found</h3><textarea style=\\\\\\"width:100%;height:120px;background:#000;color:#0f0;border:1px solid #333;padding:10px\\\\\\" onclick=\\\\\\"this.select()\\\\\\">\\"+u+\\"</textarea><p style=\\\\\\"color:#aaa;margin-top:10px\\\\\\">Click box + Ctrl+C</p></body></html>\\");w.document.close()}else{alert(\\"❌ No video URL found (len: \\"+h.length+\\")\\")}}catch(e){alert(\\"Error: \\"+e.message)}})();";');
   P.push('  var bm=$("bmDrag");if(bm)bm.href=bkm;');
   P.push('}');
 
@@ -915,26 +833,22 @@ function adminPage() {
   P.push('});');
 
   P.push('async function verify(){try{var r=await fetch("/api/check-auth",{headers:{"X-Admin-Password":token}});return r.ok}catch(e){return false}}');
-  P.push('async function doLogin(){var pwd=$("pwd").value;var m=$("lm");try{var r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pwd})});var d=await r.json();if(r.ok){token=d.token;localStorage.setItem("admin_token",token);show();setupBookmarklet()}else{m.textContent=d.error||"Failed";m.className="msg err show"}}catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}}');
+  P.push('async function doLogin(){var pwd=$("pwd").value;var m=$("lm");try{var r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pwd})});var d=await r.json();if(r.ok){token=d.token;localStorage.setItem("admin_token",token);show()}else{m.textContent=d.error||"Failed";m.className="msg err show"}}catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}}');
   P.push('function show(){$("login").classList.add("hidden");$("content").classList.remove("hidden");loadList();loadAds();loadIntervalLink()}');
   P.push('function logout(){localStorage.removeItem("admin_token");location.reload()}');
-
   P.push('function tab(n){');
   P.push(' ["tm","tad","til","tbm"].forEach(function(x){var e=$(x);if(e)e.classList.add("hidden")});');
   P.push(' ["t1","t2","t3","t4"].forEach(function(x){var e=$(x);if(e)e.classList.remove("active")});');
   P.push(' if(n==="m"){$("tm").classList.remove("hidden");$("t1").classList.add("active")}');
   P.push(' if(n==="ad"){$("tad").classList.remove("hidden");$("t2").classList.add("active")}');
   P.push(' if(n==="il"){$("til").classList.remove("hidden");$("t3").classList.add("active")}');
-  P.push(' if(n==="bm"){$("tbm").classList.remove("hidden");$("t4").classList.add("active");setupBookmarklet()}');
+  P.push(' if(n==="bm"){$("tbm").classList.remove("hidden");$("t4").classList.add("active")}');
   P.push('}');
-
   P.push('function reset(){$("eid").value="";$("title").value="";$("vurl").value="";$("thumb").value="";$("videoIdField").value="";$("embedUrl").value="";$("contentUrl").value="";$("ft").textContent="Add / Edit Movie";$("sb").textContent="Add Movie";$("cb").classList.add("hidden")}');
-
   P.push('function parseViewSource(){');
   P.push('  var text=$("viewSource").value;var m=$("psm");');
   P.push('  if(!text||!text.trim()){m.textContent="Paste source first";m.className="msg err show";return}');
-  P.push('  var found=[];');
-  P.push('  var title="";');
+  P.push('  var found=[];var title="";');
   P.push('  var tm=text.match(/<title>([^<]+)<\\/title>/i);');
   P.push('  if(tm){title=tm[1].trim();found.push("Title")}');
   P.push('  var embedUrl="";');
@@ -959,7 +873,6 @@ function adminPage() {
   P.push('  if(found.length){m.innerHTML="✅ Found: <b>"+found.join(", ")+"</b>";m.className="msg ok show";m.style.color="#b6ffb6"}');
   P.push('  else{m.innerHTML="❌ Nothing found";m.className="msg err show";m.style.color="#ffb6b6"}');
   P.push('}');
-
   P.push('async function saveMovie(){');
   P.push('  var eid=$("eid").value;var title=$("title").value.trim();var embedUrl=$("embedUrl").value.trim();');
   P.push('  var contentUrl=$("contentUrl").value.trim();var thumb=$("thumb").value.trim();');
@@ -974,10 +887,8 @@ function adminPage() {
   P.push('    else{m.textContent=d.error||"Failed";m.className="msg err show"}');
   P.push('  }catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}');
   P.push('}');
-
   P.push('async function refreshAllBtn(){if(!confirm("Server-side refresh? IP block হতে পারে"))return;try{var r=await fetch("/api/refresh-all",{method:"POST",headers:{"X-Admin-Password":token}});var d=await r.json();if(r.ok){alert("OK: "+d.ok+"  Fail: "+d.fail)}else{alert(d.error)}}catch(e){alert(e.message)}loadList()}');
 
-  // LOAD LIST
   P.push('async function loadList(){');
   P.push('  var pg=1,all=[];while(true){var r=await fetch("/api/movies?page="+pg+"&noshuffle=1");var d=await r.json();all=all.concat(d.items);if(pg>=d.totalPages)break;pg++}');
   P.push('  var el=$("list");');
@@ -1033,7 +944,7 @@ function adminPage() {
   P.push('async function autoScrapeAll(movies){');
   P.push('  var expired=movies.filter(function(m){if(!m.embedUrl)return false;if(!m.contentUrl)return true;if(m.urlExpiry&&Date.now()>m.urlExpiry-300000)return true;return false});');
   P.push('  if(!expired.length){alert("কোনো expired/empty নেই!");return}');
-  P.push('  if(!confirm(expired.length+" টি scrape করবে? (Server-side, IP block হতে পারে)"))return;');
+  P.push('  if(!confirm(expired.length+" টি scrape করবে?"))return;');
   P.push('  showProgressModal(expired.length);');
   P.push('  var success=0,failed=0,updates=[];');
   P.push('  for(var i=0;i<expired.length;i++){');
@@ -1081,7 +992,6 @@ function adminPage() {
   P.push('}');
 
   P.push('function sleep(ms){return new Promise(function(r){setTimeout(r,ms)})}');
-
   P.push('var progressModal=null;');
   P.push('function showProgressModal(total){');
   P.push('  if(progressModal)return;');
@@ -1092,16 +1002,12 @@ function adminPage() {
   P.push('}');
   P.push('function updateProgress(cur,total,title){if(!progressModal)return;var pct=Math.round(cur/total*100);document.getElementById("pmText").textContent="("+cur+"/"+total+") "+title;document.getElementById("pmBar").style.width=pct+"%";document.getElementById("pmStats").textContent=pct+"%"};');
   P.push('function hideProgressModal(){if(progressModal){progressModal.remove();progressModal=null}}');
-
   P.push('async function editMovie(id){var pg=1,all=[];while(true){var r=await fetch("/api/movies?page="+pg+"&noshuffle=1");var d=await r.json();all=all.concat(d.items);if(pg>=d.totalPages)break;pg++}var mv=all.find(function(x){return x.id===id});if(!mv)return;$("eid").value=mv.id;$("title").value=mv.title;$("embedUrl").value=mv.embedUrl||"";$("contentUrl").value=mv.contentUrl||"";$("thumb").value=mv.thumbnail||"";$("vurl").value=mv.videoUrl||"";$("videoIdField").value="";$("ft").textContent="Edit Movie";$("sb").textContent="Update";$("cb").classList.remove("hidden");window.scrollTo({top:0,behavior:"smooth"})}');
   P.push('async function delMovie(id){if(!confirm("Delete?"))return;var r=await fetch("/api/movies/"+encodeURIComponent(id),{method:"DELETE",headers:{"X-Admin-Password":token}});if(r.ok)loadList()}');
-
   P.push('async function loadAds(){var r=await fetch("/api/ads");var d=await r.json();$("ads").value=d.code||""}');
   P.push('async function saveAds(){var code=$("ads").value;var m=$("adm");var r=await fetch("/api/ads",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({code:code})});if(r.ok){m.textContent="Saved";m.className="msg ok show"}else{m.textContent="Failed";m.className="msg err show"}setTimeout(function(){m.classList.remove("show")},2500)}');
-
   P.push('async function loadIntervalLink(){try{var r=await fetch("/api/interval-link");var d=await r.json();$("intervalLinkInput").value=d.url||"";$("intervalSecondsInput").value=d.seconds||60;$("intervalFirstDelayInput").value=d.firstDelay||15}catch(e){}}');
   P.push('async function saveIntervalLink(){var u=$("intervalLinkInput").value.trim();var s=parseInt($("intervalSecondsInput").value)||60;var f=parseInt($("intervalFirstDelayInput").value)||15;var m=$("ilm");if(s<5){m.textContent="Min 5s";m.className="msg err show";return}try{var r=await fetch("/api/interval-link",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({url:u,seconds:s,firstDelay:f})});if(r.ok){m.textContent="✅ Saved";m.className="msg ok show"}else{m.textContent="Failed";m.className="msg err show"}}catch(e){m.textContent=e.message;m.className="msg err show"}setTimeout(function(){m.classList.remove("show")},3000)}');
-
   P.push('<\/script></body></html>');
   return P.join("\n");
 }
