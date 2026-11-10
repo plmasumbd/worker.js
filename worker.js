@@ -907,7 +907,7 @@ function showAdWithContent(adUrl){
   ifr.scrolling="no";
   ifr.allow="autoplay; fullscreen";
   overlay.insertBefore(ifr,overlay.firstChild);
-  var totalSecs=4;
+  var totalSecs=7;
   adEndsAt=Date.now()+totalSecs*1000;
   $("adTimer").style.display="";
   $("adTimer").textContent=totalSecs+"s";
