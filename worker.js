@@ -98,6 +98,8 @@ async function refreshAll(request, env) {
 }
 
 // ================= SCRAPE EMBED PAGE =================
+
+// ================= SCRAPE EMBED PAGE (FIXED) =================
 async function fetchFreshFromEmbed(embedUrl) {
   const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
@@ -110,7 +112,8 @@ async function fetchFreshFromEmbed(embedUrl) {
     const res = await fetch(embedUrl, { headers, redirect: "follow" });
     if (res.ok) text = await res.text();
   } catch (e) {}
-  if (!text || !/contentUrl/i.test(text)) {
+  // fallback: jina reader
+  if (!text || (!/setVideoUrl/i.test(text) && !/contentUrl/i.test(text) && !/secure=/i.test(text))) {
     try {
       const j = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain" } });
       if (j.ok) text = await j.text();
@@ -118,17 +121,45 @@ async function fetchFreshFromEmbed(embedUrl) {
   }
   const out = { contentUrl: "", title: "", thumbnail: "", views: 0 };
   if (!text) return out;
-  let m = text.match(/"contentUrl"\s*:\s*"([^"]+)"/i);
+
+  // 🔥 PRIORITY 1: html5player.setVideoUrlHigh('...')
+  let m = text.match(/setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]/i);
   if (m) out.contentUrl = m[1];
+
+  // PRIORITY 2: setVideoUrlLow / setVideoUrl
+  if (!out.contentUrl) {
+    m = text.match(/setVideoUrl(?:Low)?\s*\(\s*['"]([^'"]+)['"]/i);
+    if (m) out.contentUrl = m[1];
+  }
+
+  // PRIORITY 3: "contentUrl":"..."
+  if (!out.contentUrl) {
+    m = text.match(/"contentUrl"\s*:\s*"([^"]+)"/i);
+    if (m) out.contentUrl = m[1];
+  }
+
+  // PRIORITY 4: যেকোনো URL যাতে ?secure= আছে (mp4)
+  if (!out.contentUrl) {
+    m = text.match(/['"](https?:\/\/[^'"]+\.mp4\?secure=[^'"]+)['"]/i);
+    if (m) out.contentUrl = m[1];
+  }
+
+  if (out.contentUrl) out.contentUrl = out.contentUrl.replace(/&amp;/g, "&").replace(/\\\//g, "/");
+
+  // Title
   m = text.match(/"name"\s*:\s*"([^"]+)"/i);
   if (m) out.title = m[1];
+
+  // Thumbnail
   m = text.match(/"thumbnailUrl"\s*:\s*\[\s*"([^"]+)"/i) || text.match(/"thumbnailUrl"\s*:\s*"([^"]+)"/i);
-  if (m) out.thumbnail = m[1];
+  if (m) out.thumbnail = m[1].replace(/&amp;/g, "&");
+
+  // Views
   m = text.match(/"userInteractionCount"\s*:\s*"?(\d+)"?/i);
   if (m) out.views = parseInt(m[1], 10) || 0;
+
   return out;
 }
-
 function deriveEmbedUrl(movie) {
   if (movie.embedUrl && /^https?:\/\//i.test(movie.embedUrl)) return movie.embedUrl;
   if (movie.videoUrl) {
