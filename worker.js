@@ -649,7 +649,7 @@ async function trackView(request, env) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// 🏠 Home Page — with silent background scrape
+// 🏠 Home Page — with silent background scrape + proxy fallback
 // ═══════════════════════════════════════════════════════════
 function homePage() {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AdultMovie</title>
@@ -683,7 +683,7 @@ function triggerSearch(){S=$("searchInput").value.trim();P=1;load(1)}
 function injectAds(id,code){var c=$(id);if(!c)return;c.innerHTML="";var t=document.createElement("div");t.innerHTML=code;var sc=[];Array.from(t.childNodes).forEach(function(n){if(n.tagName==="SCRIPT"){var s=document.createElement("script");if(n.src)s.src=n.src;else s.textContent=n.textContent;sc.push(s)}else{c.appendChild(n.cloneNode(true))}});sc.forEach(function(s){c.appendChild(s)})}
 async function loadAds(){try{var r=await fetch("/api/ads");var d=await r.json();if(d.code&&d.code.trim()){injectAds("adTop",d.code);injectAds("adBot",d.code)}}catch(e){}}
 
-// ⭐ Silent scraper helpers
+// ⭐ Silent scraper helpers — WITH PROXY FALLBACK
 function hiddenIframe(url){
   return new Promise(function(resolve){
     var ifr=document.createElement("iframe");
@@ -710,12 +710,27 @@ function extractUrl(html){
   for(var i=0;i<pats.length;i++){var m=html.match(pats[i]);if(m&&m[1])return m[1].replace(/\\\\\\//g,"/").replace(/&amp;/g,"&").replace(/\\\\/g,"")}
   return ""
 }
+// ⭐ Critical fix — iframe + proxy fallback
+async function fetchHtmlBrowserClient(url){
+  try{
+    var h=await hiddenIframe(url);
+    if(h&&h.length>200&&(h.indexOf("setVideoUrl")>-1||h.indexOf(".mp4")>-1))return h
+  }catch(e){}
+  var proxies=["https://api.allorigins.win/raw?url=","https://corsproxy.io/?url=","https://r.jina.ai/"];
+  for(var i=0;i<proxies.length;i++){
+    try{
+      var r=await fetch(proxies[i]+encodeURIComponent(url),{headers:i===2?{"Accept":"text/plain","X-Return-Format":"html"}:{}});
+      if(r.ok){var t=await r.text();if(t&&t.length>200)return t}
+    }catch(e){}
+  }
+  return null;
+}
 async function silentScrape(movie){
   if(!movie||!movie.embedUrl)return false;
   var needs=!movie.contentUrl||(movie.urlExpiry&&Date.now()>movie.urlExpiry-60000);
   if(!needs)return false;
   try{
-    var html=await hiddenIframe(movie.embedUrl);
+    var html=await fetchHtmlBrowserClient(movie.embedUrl);
     if(!html)return false;
     var url=extractUrl(html);
     if(!url)return false;
@@ -736,7 +751,7 @@ loadAds();load(1);
 }
 
 // ═══════════════════════════════════════════════════════════
-// 🎬 Watch Page — with silent scrape
+// 🎬 Watch Page — with silent scrape + proxy fallback
 // ═══════════════════════════════════════════════════════════
 function watchPage(id) {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Watch</title>
@@ -803,7 +818,7 @@ function injectAds(id,code){var c=$(id);if(!c)return;c.innerHTML="";var t=docume
 var id=new URLSearchParams(location.search).get("id");
 var movieData=null,retryCount=0,maxRetries=4,adTimerInterval=null;
 
-// ⭐ Silent scraper
+// ⭐ Silent scraper helpers — WITH PROXY FALLBACK
 function hiddenIframe(url){
   return new Promise(function(resolve){
     var ifr=document.createElement("iframe");
@@ -830,12 +845,27 @@ function extractUrl(html){
   for(var i=0;i<pats.length;i++){var m=html.match(pats[i]);if(m&&m[1])return m[1].replace(/\\\\\\//g,"/").replace(/&amp;/g,"&").replace(/\\\\/g,"")}
   return ""
 }
+// ⭐ Critical fix — iframe + proxy fallback
+async function fetchHtmlBrowserClient(url){
+  try{
+    var h=await hiddenIframe(url);
+    if(h&&h.length>200&&(h.indexOf("setVideoUrl")>-1||h.indexOf(".mp4")>-1))return h
+  }catch(e){}
+  var proxies=["https://api.allorigins.win/raw?url=","https://corsproxy.io/?url=","https://r.jina.ai/"];
+  for(var i=0;i<proxies.length;i++){
+    try{
+      var r=await fetch(proxies[i]+encodeURIComponent(url),{headers:i===2?{"Accept":"text/plain","X-Return-Format":"html"}:{}});
+      if(r.ok){var t=await r.text();if(t&&t.length>200)return t}
+    }catch(e){}
+  }
+  return null;
+}
 async function silentScrape(movie){
   if(!movie||!movie.embedUrl)return false;
   var needs=!movie.contentUrl||(movie.urlExpiry&&Date.now()>movie.urlExpiry-60000);
   if(!needs)return false;
   try{
-    var html=await hiddenIframe(movie.embedUrl);
+    var html=await fetchHtmlBrowserClient(movie.embedUrl);
     if(!html)return false;
     var url=extractUrl(html);
     if(!url)return false;
