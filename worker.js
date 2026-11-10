@@ -1,17 +1,9 @@
 // ═══════════════════════════════════════════════════════════
-// ⚙️ কনফিগ — শুধু এখানে আপনার ডোমেইন বদলান
-// ═══════════════════════════════════════════════════════════
 const ADMIN_PASSWORD = "admin123";
 const PAGE_SIZE = 20;
 const CACHE_TTL = 5 * 60 * 1000;
 const URL_SAFETY_MARGIN = 90 * 1000;
 
-const EMBED_BASE = "https://www.xnxx.com/";   // ⬅️ আপনার embed domain
-const EMBED_PATH = "/embedframe/";         // ⬅️ path
-const FALLBACK_REFERER = EMBED_BASE + "/";
-
-// ═══════════════════════════════════════════════════════════
-// 🚀 Worker Entry
 // ═══════════════════════════════════════════════════════════
 export default {
   async fetch(request, env) {
@@ -50,7 +42,7 @@ export default {
 };
 
 // ═══════════════════════════════════════════════════════════
-// 🔗 URL Expiry Parser
+// 🔗 URL Expiry
 // ═══════════════════════════════════════════════════════════
 function getUrlExpiry(url) {
   if (!url) return 0;
@@ -75,7 +67,7 @@ function isUrlExpired(url) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// 🎬 Stream Proxy
+// 🎬 Stream
 // ═══════════════════════════════════════════════════════════
 async function streamVideo(request, env, url) {
   const id = url.searchParams.get("id");
@@ -92,7 +84,7 @@ async function streamVideo(request, env, url) {
   const missing = !videoUrl;
 
   if (missing || isExpired) {
-    const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
+    const embedUrl = deriveEmbedUrl(movie);
     let refreshed = false;
     if (embedUrl) {
       try {
@@ -114,9 +106,12 @@ async function streamVideo(request, env, url) {
     if (!videoUrl) return new Response("No video", { status: 404 });
   }
 
+  // ✅ Referer/Origin — embedUrl এর নিজের origin থেকে
+  const embedUrl = movie.embedUrl || "";
+  const refererUrl = embedUrl || (() => { try { return new URL(videoUrl).origin + "/"; } catch (e) { return ""; } })();
+  const videoOrigin = (() => { try { return new URL(embedUrl || videoUrl).origin; } catch (e) { return ""; } })();
+
   const range = request.headers.get("Range");
-  const videoOrigin = (() => { try { return new URL(videoUrl).origin; } catch (e) { return EMBED_BASE; } })();
-  const refererUrl = movie.embedUrl || FALLBACK_REFERER;
   const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
     "Accept": "*/*",
@@ -131,7 +126,6 @@ async function streamVideo(request, env, url) {
   catch (e) { return new Response("Fetch failed", { status: 502 }); }
 
   if (!upstream.ok && upstream.status !== 206) {
-    const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
     if (embedUrl) {
       try {
         const fresh = await fetchFreshFromEmbed(embedUrl);
@@ -180,11 +174,14 @@ function guessContentType(url) {
 async function fetchFreshFromEmbed(embedUrl) {
   const out = { contentUrl: "", title: "", thumbnail: "", views: 0, source: "" };
   let text = "";
+
+  // ✅ Referer = embedUrl এর origin
+  const originRef = (() => { try { return new URL(embedUrl).origin + "/"; } catch (e) { return ""; } })();
+
   const isValid = (t) => {
     if (!t || t.length < 100) return false;
     if (/setVideoUrl(?:High|Low)?\s*\(/i.test(t)) return true;
     if (/https?:\/\/[^"'\s<>\\]+\.(?:mp4|m3u8)/i.test(t)) return true;
-    if (/["'](?:file|contentUrl|videoUrl|src|source)["']\s*:\s*["'][^"']+\.(?:mp4|m3u8)/i.test(t)) return true;
     return false;
   };
   const tryText = async (fn, label) => {
@@ -208,10 +205,11 @@ async function fetchFreshFromEmbed(embedUrl) {
     return r.ok ? await r.text() : null;
   }, "corsproxy");
   if (!text) await tryText(async () => {
-    const r = await fetch(embedUrl, { headers: { "User-Agent": "Mozilla/5.0", "Referer": FALLBACK_REFERER, "Accept": "text/html,*/*" }, redirect: "follow" });
+    const r = await fetch(embedUrl, { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36", "Referer": originRef, "Accept": "text/html,*/*" }, redirect: "follow" });
     return r.ok ? await r.text() : null;
   }, "direct");
   if (!text) return out;
+
   out.contentUrl = extractVideoUrl(text);
   let m = text.match(/<title>([^<]+)<\/title>/i) || text.match(/"name"\s*:\s*"([^"]+)"/i) || text.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)/i);
   if (m) out.title = decodeHtml(m[1]).trim();
@@ -255,15 +253,14 @@ function extractVideoUrl(text) {
 }
 function decodeHtml(s) { return String(s).replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " "); }
 
+// ✅ শুধু movie.embedUrl return — কোনো domain build নেই
 function deriveEmbedUrl(movie) {
   if (movie.embedUrl && /^https?:\/\//i.test(movie.embedUrl)) return movie.embedUrl;
-  if (movie.sourceUrl && /^https?:\/\//i.test(movie.sourceUrl)) return movie.sourceUrl;
   if (movie.videoUrl) {
     const m = String(movie.videoUrl).match(/<iframe[^>]*\ssrc\s*=\s*["']([^"']+)["']/i);
     if (m) return m[1];
     if (/^https?:\/\//i.test(movie.videoUrl) && !/\.(mp4|m3u8)/i.test(movie.videoUrl)) return movie.videoUrl;
   }
-  if (movie.id && /^[a-z0-9\-]+$/i.test(String(movie.id))) return EMBED_BASE + EMBED_PATH + movie.id;
   return "";
 }
 
@@ -272,33 +269,19 @@ function deriveEmbedUrl(movie) {
 // ═══════════════════════════════════════════════════════════
 async function debugEmbed(url) {
   const embedUrl = url.searchParams.get("url");
-  if (!embedUrl) return json({ error: "url param দরকার" }, 400);
+  if (!embedUrl) return json({ error: "url param required" }, 400);
+  const originRef = (() => { try { return new URL(embedUrl).origin + "/"; } catch (e) { return ""; } })();
   const result = { embedUrl, attempts: [] };
   const tryOne = async (label, fn) => {
     try {
       const text = await fn();
       if (!text) return result.attempts.push({ method: label, error: "empty" });
-      result.attempts.push({
-        method: label, length: text.length,
-        hasSetVideo: /setVideoUrl/i.test(text),
-        hasMp4: /\.mp4/i.test(text),
-        extracted: extractVideoUrl(text) || null,
-        preview: text.slice(0, 500)
-      });
+      result.attempts.push({ method: label, length: text.length, hasSetVideo: /setVideoUrl/i.test(text), hasMp4: /\.mp4/i.test(text), extracted: extractVideoUrl(text) || null, preview: text.slice(0, 500) });
     } catch (e) { result.attempts.push({ method: label, error: e.message }); }
   };
-  await tryOne("jina-html", async () => {
-    const r = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "html" } });
-    return r.ok ? await r.text() : null;
-  });
-  await tryOne("allorigins", async () => {
-    const r = await fetch("https://api.allorigins.win/raw?url=" + encodeURIComponent(embedUrl));
-    return r.ok ? await r.text() : null;
-  });
-  await tryOne("direct", async () => {
-    const r = await fetch(embedUrl, { headers: { "User-Agent": "Mozilla/5.0", "Referer": FALLBACK_REFERER }, redirect: "follow" });
-    return r.ok ? await r.text() : null;
-  });
+  await tryOne("jina", async () => { const r = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "html" } }); return r.ok ? await r.text() : null; });
+  await tryOne("allorigins", async () => { const r = await fetch("https://api.allorigins.win/raw?url=" + encodeURIComponent(embedUrl)); return r.ok ? await r.text() : null; });
+  await tryOne("direct", async () => { const r = await fetch(embedUrl, { headers: { "User-Agent": "Mozilla/5.0", "Referer": originRef }, redirect: "follow" }); return r.ok ? await r.text() : null; });
   return json(result);
 }
 
@@ -320,7 +303,7 @@ async function refreshMovie(request, env) {
   if (b.html && b.html.trim().length > 50) { contentUrl = extractVideoUrl(b.html); source = "html-paste"; }
   if (!contentUrl && b.videoUrl && /^https?:\/\//.test(b.videoUrl)) { contentUrl = b.videoUrl.trim(); source = "url-direct"; }
   if (!contentUrl) {
-    const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
+    const embedUrl = deriveEmbedUrl(movie);
     if (embedUrl) {
       try {
         const fresh = await fetchFreshFromEmbed(embedUrl);
@@ -345,8 +328,7 @@ async function refreshMovie(request, env) {
 async function refreshAll(request, env) {
   const auth = request.headers.get("X-Admin-Password");
   if (auth !== ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
-  const result = await autoRefreshAll(env, true);
-  return json({ success: true, ...result });
+  return json({ success: true, ...(await autoRefreshAll(env, true)) });
 }
 
 async function autoRefreshAll(env, verbose = false) {
@@ -360,7 +342,7 @@ async function autoRefreshAll(env, verbose = false) {
     const expired = isUrlExpired(videoUrl);
     const stale = (Date.now() - (movie.lastRefresh || 0)) > CACHE_TTL;
     if (!verbose && videoUrl && !expired && !stale) { skipped++; continue; }
-    const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
+    const embedUrl = deriveEmbedUrl(movie);
     if (!embedUrl) { fail++; if (verbose) failures.push({ id: movie.id, title: movie.title, reason: "no embedUrl" }); }
     else {
       try {
@@ -425,11 +407,8 @@ async function autoContent(request, env) {
     const expired = isUrlExpired(movie.contentUrl);
     const fresh = (now - (movie.lastRefresh || 0)) < CACHE_TTL;
     if (!force && movie.contentUrl && fresh && !expired) return json({ success: true, contentUrl: movie.contentUrl, cached: true });
-    const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
-    if (!embedUrl) {
-      if (movie.contentUrl && !expired) return json({ success: true, contentUrl: movie.contentUrl, stale: true });
-      return json({ error: "No embedUrl" }, 400);
-    }
+    const embedUrl = deriveEmbedUrl(movie);
+    if (!embedUrl) return json({ error: "No embedUrl" }, 400);
     const freshData = await fetchFreshFromEmbed(embedUrl);
     if (freshData.contentUrl) {
       list[idx].contentUrl = freshData.contentUrl;
@@ -459,16 +438,10 @@ async function fetchSourceData(request) {
       const j = await fetch("https://r.jina.ai/" + targetUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "html" } });
       if (j.ok) text = await j.text();
     } catch (e) {}
-    const escapedPath = EMBED_PATH.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const iframes = text.match(/<iframe[\s\S]*?>/gi) || [];
     for (let i = 0; i < iframes.length; i++) {
       const sm = iframes[i].match(/src\s*=\s*["']([^"']+)["']/i);
-      if (sm && sm[1].includes(EMBED_PATH)) { embedUrl = sm[1]; break; }
-      if (sm && i === 0) embedUrl = sm[1];
-    }
-    if (!embedUrl) {
-      const d = text.match(new RegExp("https?:\\/\\/[^\"'\\s<>]*" + escapedPath + "[a-zA-Z0-9\\-]+", "i"));
-      if (d) embedUrl = d[0];
+      if (sm && /embedframe|embed\/|player\//i.test(sm[1])) { embedUrl = sm[1]; break; }
     }
     if (embedUrl) embedUrl = embedUrl.replace(/&amp;/g, "&");
     let videoId = "";
@@ -530,7 +503,7 @@ async function addMovie(request, env) {
   const embedUrl = (b.embedUrl || extractSrc(b.videoUrl || "")).trim();
   const contentUrl = (b.contentUrl || "").trim();
   const vurl = contentUrl || embedUrl;
-  const norm = (u) => { if (!u) return ""; let s = String(u).trim().toLowerCase(); try { const p = new URL(s); return p.origin + p.pathname.replace(/\/+$/, ""); } catch (e) { return s.replace(/[?#].*$/, ""); } };
+  const norm = (u) => { if (!u) return ""; try { const p = new URL(String(u)); return p.origin + p.pathname.replace(/\/+$/, ""); } catch (e) { return String(u).replace(/[?#].*$/, ""); } };
   for (const e of list) {
     if (b.videoId && e.id === b.videoId) return json({ error: "এই ভিডিও আগেই আছে!" }, 400);
     if (embedUrl && norm(e.embedUrl) === norm(embedUrl)) return json({ error: "এই ভিডিও আগেই আছে!" }, 400);
@@ -595,11 +568,7 @@ async function saveAds(request, env) {
   return json({ success: true });
 }
 async function getIntervalLink(env) {
-  return json({
-    url: (await env.MOVIES.get("interval_link")) || "",
-    seconds: parseInt((await env.MOVIES.get("interval_seconds")) || "60"),
-    firstDelay: parseInt((await env.MOVIES.get("interval_first_delay")) || "15")
-  });
+  return json({ url: (await env.MOVIES.get("interval_link")) || "", seconds: parseInt((await env.MOVIES.get("interval_seconds")) || "60"), firstDelay: parseInt((await env.MOVIES.get("interval_first_delay")) || "15") });
 }
 async function saveIntervalLink(request, env) {
   if (request.headers.get("X-Admin-Password") !== ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
@@ -852,7 +821,6 @@ function adminPage() {
   P.push('<button id="t4" data-tab="bm">📌 Bookmarklet</button>');
   P.push('</div>');
 
-  // MOVIES
   P.push('<div id="tm">');
   P.push('<div class="card paste-box"><h2 style="color:#00c853;margin-bottom:10px">📋 Paste View Source</h2><p class="hint" style="margin-bottom:10px;color:#aaddff">Video page → Ctrl+U → Ctrl+A → Ctrl+C → paste here</p><textarea id="viewSource" placeholder="Paste View Source here..." style="min-height:150px"></textarea><button class="primary" style="background:#00c853;margin-top:10px" id="parseSourceBtn">🔍 Extract & Fill</button><div id="psm" class="msg" style="margin-top:10px"></div></div>');
   P.push('<div class="card"><h2 id="ft">Add / Edit Movie</h2><input type="hidden" id="eid"><input type="hidden" id="videoIdField">');
@@ -865,10 +833,8 @@ function adminPage() {
   P.push('<div class="card"><h2>All Movies</h2><div id="list"></div></div>');
   P.push('</div>');
 
-  // ADS
   P.push('<div id="tad" class="hidden"><div class="card"><h2>Ad Code</h2><textarea id="ads" style="min-height:200px" placeholder="Ad script / HTML"></textarea><button class="primary" id="adsSaveBtn">Save</button><div id="adm" class="msg"></div></div></div>');
 
-  // INTERVAL
   P.push('<div id="til" class="hidden"><div class="card">');
   P.push('<h2>⏱️ Interval Link</h2><p class="hint" style="color:#aaddff;margin-bottom:16px">Watch page-এ নির্দিষ্ট সময় পর link open</p>');
   P.push('<label>URL</label><input type="text" id="intervalLinkInput" placeholder="https://example.com">');
@@ -878,39 +844,33 @@ function adminPage() {
   P.push('<div id="ilm" class="msg"></div>');
   P.push('</div></div>');
 
-  // BOOKMARKLET
   P.push('<div id="tbm" class="hidden"><div class="card">');
   P.push('<h2>📌 Bookmarklet — IP Block Bypass</h2>');
   P.push('<p class="hint" style="color:#aaddff;margin-bottom:16px">Server থেকে embed site block হলে এই bookmarklet browser থেকে URL বের করে।</p>');
   P.push('<div class="step"><b>ধাপ ১:</b> নিচের বাটন <b>drag</b> করে bookmarks bar এ ফেলুন</div>');
   P.push('<div class="bm-display"><a id="bmDrag" href="#" class="bm-btn">🎬 Scrape Video URL</a><div class="hint" style="margin-top:8px">উপরে টেনে bookmarks bar এ ফেলুন</div></div>');
-  P.push('<div class="step"><b>ধাপ ২:</b> Embed page খুলুন (যেমন: <code style="background:#000;padding:2px 6px">' + EMBED_BASE + EMBED_PATH + 'xxx</code>)</div>');
+  P.push('<div class="step"><b>ধাপ ২:</b> যেকোনো embed page খুলুন (যেমন: <code style="background:#000;padding:2px 6px">https://www.example.com/embedframe/xxx</code>)</div>');
   P.push('<div class="step"><b>ধাপ ৩:</b> Bookmarks bar থেকে <b>🎬 Scrape Video URL</b> এ ক্লিক করুন</div>');
   P.push('<div class="step"><b>ধাপ ৪:</b> Video URL popup এ আসবে → Ctrl+C</div>');
   P.push('<div class="step"><b>ধাপ ৫:</b> Admin → Edit → Content URL paste → Update</div>');
-  P.push('<p class="hint" style="margin-top:20px;color:#ff9800">💡 Bookmarklet কাজ না করলে browser এ JavaScript bookmarks allow করুন।</p>');
   P.push('</div></div>');
 
   P.push('<button class="primary danger" id="logoutBtn">Logout</button>');
   P.push('</div></div>');
 
-  // SCRIPT
   P.push('<script>');
   P.push('var token=localStorage.getItem("admin_token")||"";');
-  P.push('var EMBED_BASE="' + EMBED_BASE + '";');
-  P.push('var EMBED_PATH="' + EMBED_PATH + '";');
   P.push('function $(i){return document.getElementById(i)}');
   P.push('function esc(s){return String(s).replace(/[&<>]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;"}[c]})}');
   P.push('function fmt(n){n=parseInt(n)||0;if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1e3)return(n/1e3).toFixed(1)+"K";return n}');
   P.push('function toast(msg,type){var t=$("toast");t.textContent=msg;t.className="toast show"+(type==="err"?" err":"");setTimeout(function(){t.classList.remove("show")},2500)}');
 
-  // BOOKMARKLET
+  // ⭐ BOOKMARKLET — no domain, works on current page
   P.push('function setupBookmarklet(){');
   P.push('  var bkm="javascript:(function(){try{var h=document.documentElement.innerHTML;var ps=[/setVideoUrlHigh\\\\s*\\\\(\\\\s*[\\x27\\"]([^\\x27\\"]+)/i,/setVideoUrlLow\\\\s*\\\\(\\\\s*[\\x27\\"]([^\\x27\\"]+)/i,/setVideoUrl\\\\s*\\\\(\\\\s*[\\x27\\"]([^\\x27\\"]+)/i,/\\"contentUrl\\"\\\\s*:\\\\s*\\"([^\\"]+)\\"/i,/(https?:\\\\/\\\\/[^\\"\\\\s<>]+\\\\.mp4[^\\"\\\\s<>]*)/i,/(https?:\\\\/\\\\/[^\\"\\\\s<>]+\\\\.m3u8[^\\"\\\\s<>]*)/i];var u=null;for(var i=0;i<ps.length;i++){var m=h.match(ps[i]);if(m&&m[1]){u=m[1].replace(/\\\\\\\\\\\\//g,\\"/\\").replace(/&amp;/g,\\"&\\").replace(/\\\\\\\\/g,\\"\\");break}}if(u){var w=window.open(\\"\\",\\"_blank\\",\\"width=700,height=250\\");w.document.write(\\"<html><body style=\\\\\\"background:#1c1c1c;color:#fff;font-family:monospace;padding:20px\\\\\\"><h3 style=\\\\\\"color:#00c853\\\\\\">✅ Video URL Found</h3><textarea style=\\\\\\"width:100%;height:120px;background:#000;color:#0f0;border:1px solid #333;padding:10px\\\\\\" onclick=\\\\\\"this.select()\\\\\\">\\"+u+\\"</textarea><p style=\\\\\\"color:#aaa;margin-top:10px\\\\\\">Click box + Ctrl+C</p></body></html>\\");w.document.close()}else{alert(\\"❌ No video URL found (len: \\"+h.length+\\")\\")}}catch(e){alert(\\"Error: \\"+e.message)}})();";');
   P.push('  var bm=$("bmDrag");if(bm)bm.href=bkm;');
   P.push('}');
 
-  // INIT
   P.push('window.addEventListener("DOMContentLoaded",function(){');
   P.push(' $("loginBtn").onclick=doLogin;');
   P.push(' $("sb").onclick=saveMovie;');
@@ -924,13 +884,11 @@ function adminPage() {
   P.push(' if(token)verify().then(function(ok){if(ok)show()});');
   P.push('});');
 
-  // AUTH
   P.push('async function verify(){try{var r=await fetch("/api/check-auth",{headers:{"X-Admin-Password":token}});return r.ok}catch(e){return false}}');
   P.push('async function doLogin(){var pwd=$("pwd").value;var m=$("lm");try{var r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pwd})});var d=await r.json();if(r.ok){token=d.token;localStorage.setItem("admin_token",token);show()}else{m.textContent=d.error||"Failed";m.className="msg err show"}}catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}}');
   P.push('function show(){$("login").classList.add("hidden");$("content").classList.remove("hidden");loadList();loadAds();loadIntervalLink()}');
   P.push('function logout(){localStorage.removeItem("admin_token");location.reload()}');
 
-  // TABS
   P.push('function tab(n){');
   P.push(' ["tm","tad","til","tbm"].forEach(function(x){var e=$(x);if(e)e.classList.add("hidden")});');
   P.push(' ["t1","t2","t3","t4"].forEach(function(x){var e=$(x);if(e)e.classList.remove("active")});');
@@ -940,10 +898,8 @@ function adminPage() {
   P.push(' if(n==="bm"){$("tbm").classList.remove("hidden");$("t4").classList.add("active")}');
   P.push('}');
 
-  // RESET
   P.push('function reset(){$("eid").value="";$("title").value="";$("vurl").value="";$("thumb").value="";$("videoIdField").value="";$("embedUrl").value="";$("contentUrl").value="";$("ft").textContent="Add / Edit Movie";$("sb").textContent="Add Movie";$("cb").classList.add("hidden")}');
 
-  // PARSE SOURCE
   P.push('function parseViewSource(){');
   P.push('  var text=$("viewSource").value;var m=$("psm");');
   P.push('  if(!text||!text.trim()){m.textContent="Paste source first";m.className="msg err show";return}');
@@ -953,8 +909,7 @@ function adminPage() {
   P.push('  if(tm){title=tm[1].trim();found.push("Title")}');
   P.push('  var embedUrl="";');
   P.push('  var iframes=text.match(/<iframe[\\s\\S]*?>/gi)||[];');
-  P.push('  for(var i=0;i<iframes.length;i++){var sm=iframes[i].match(/src\\s*=\\s*["\']([^"\']+)["\']/i);if(sm&&sm[1].indexOf(EMBED_PATH)>-1){embedUrl=sm[1];break}}');
-  P.push('  if(!embedUrl){var dm=text.match(new RegExp("https?:\\\\/\\\\/[^\\"\\x27\\\\s<>]*"+EMBED_PATH.replace(/[.*+?^${}()|[\\]\\\\]/g,"\\\\$&")+"[a-zA-Z0-9\\\\-]+","i"));if(dm)embedUrl=dm[0]}');
+  P.push('  for(var i=0;i<iframes.length;i++){var sm=iframes[i].match(/src\\s*=\\s*["\']([^"\']+)["\']/i);if(sm&&/embedframe|embed\\/|player\\//i.test(sm[1])){embedUrl=sm[1];break}}');
   P.push('  if(embedUrl){embedUrl=embedUrl.replace(/&amp;/g,"&");found.push("Embed URL")}');
   P.push('  var contentUrl="";');
   P.push('  var cm=text.match(/setVideoUrlHigh\\s*\\(\\s*[\'"]([^\'"]+)[\'"]/i);');
@@ -975,7 +930,6 @@ function adminPage() {
   P.push('  else{m.innerHTML="❌ Nothing found";m.className="msg err show";m.style.color="#ffb6b6"}');
   P.push('}');
 
-  // SAVE MOVIE
   P.push('async function saveMovie(){');
   P.push('  var eid=$("eid").value;var title=$("title").value.trim();var embedUrl=$("embedUrl").value.trim();');
   P.push('  var contentUrl=$("contentUrl").value.trim();var thumb=$("thumb").value.trim();');
@@ -991,10 +945,9 @@ function adminPage() {
   P.push('  }catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}');
   P.push('}');
 
-  // SERVER REFRESH ALL
   P.push('async function refreshAllBtn(){if(!confirm("Server-side refresh? IP block হতে পারে"))return;try{var r=await fetch("/api/refresh-all",{method:"POST",headers:{"X-Admin-Password":token}});var d=await r.json();if(r.ok){alert("OK: "+d.ok+"  Fail: "+d.fail)}else{alert(d.error)}}catch(e){alert(e.message)}loadList()}');
 
-  // LOAD LIST
+  // ⭐ LOAD LIST — uses mv.embedUrl directly
   P.push('async function loadList(){');
   P.push('  var pg=1,all=[];while(true){var r=await fetch("/api/movies?page="+pg+"&noshuffle=1");var d=await r.json();all=all.concat(d.items);if(pg>=d.totalPages)break;pg++}');
   P.push('  var el=$("list");');
@@ -1011,12 +964,13 @@ function adminPage() {
   P.push('    var s=mv.thumbnail?"background-image:url(\'"+mv.thumbnail+"\')":"";');
   P.push('    var expired=mv.urlExpiry&&Date.now()>mv.urlExpiry-60000;');
   P.push('    var hasC=mv.contentUrl?(expired?"🟡":"✅"):"⚠️";');
+  P.push('    var noEmbed=!mv.embedUrl?" ❌Embed":"";
   P.push('    var row=document.createElement("div");row.className="item";');
   P.push('    var info=document.createElement("div");info.className="info";');
-  P.push('    info.innerHTML=\'<div class="mini" style="\'+s+\'"></div><div><h4>\'+esc(mv.title)+\' \'+hasC+\'</h4><div class="stats">👁 \'+fmt(mv.views||0)+\'</div></div>\';');
+  P.push('    info.innerHTML=\'<div class="mini" style="\'+s+\'"></div><div><h4>\'+esc(mv.title)+\' \'+hasC+noEmbed+\'</h4><div class="stats">👁 \'+fmt(mv.views||0)+\'</div></div>\';');
   P.push('    var acts=document.createElement("div");acts.className="acts";');
-  P.push('    var sb=document.createElement("button");sb.className="primary small";sb.style.cssText="background:#00c853;margin:0";sb.textContent="🚀 Scrape";sb.onclick=function(){autoScrapeOne(mv.id,sb)};');
-  P.push('    var cb=document.createElement("button");cb.className="primary small";cb.style.cssText="background:#9c27b0;margin:0";cb.textContent="📌 Open";cb.onclick=function(){copyEmbedAndOpen(mv.id)};');
+  P.push('    var sb=document.createElement("button");sb.className="primary small";sb.style.cssText="background:#00c853;margin:0";sb.textContent="🚀 Scrape";sb.onclick=function(){autoScrapeOne(mv,sb)};');
+  P.push('    var cb=document.createElement("button");cb.className="primary small";cb.style.cssText="background:#9c27b0;margin:0";cb.textContent="📌 Open";cb.onclick=function(){openEmbed(mv)};');
   P.push('    var eb=document.createElement("button");eb.className="primary small";eb.style.cssText="margin:0";eb.textContent="Edit";eb.onclick=function(){editMovie(mv.id)};');
   P.push('    var db=document.createElement("button");db.className="primary small danger";db.style.cssText="margin:0";db.textContent="Del";db.onclick=function(){delMovie(mv.id)};');
   P.push('    acts.appendChild(sb);acts.appendChild(cb);acts.appendChild(eb);acts.appendChild(db);');
@@ -1024,23 +978,23 @@ function adminPage() {
   P.push('  });');
   P.push('}');
 
-  // COPY EMBED
-  P.push('function copyEmbedAndOpen(id){');
-  P.push('  var url=EMBED_BASE+EMBED_PATH+id;');
-  P.push('  navigator.clipboard.writeText(url).then(function(){toast("✅ Copied! Opening...")}).catch(function(){prompt("Copy:",url)});');
-  P.push('  setTimeout(function(){window.open(url,"_blank")},500);');
+  // ⭐ OPEN — সরাসরি mv.embedUrl
+  P.push('function openEmbed(mv){');
+  P.push('  if(!mv.embedUrl){toast("❌ No embedUrl","err");return}');
+  P.push('  navigator.clipboard.writeText(mv.embedUrl).then(function(){toast("✅ Copied! Opening...")}).catch(function(){prompt("Copy:",mv.embedUrl)});');
+  P.push('  setTimeout(function(){window.open(mv.embedUrl,"_blank")},500);');
   P.push('}');
 
-  // AUTO SCRAPE ONE
-  P.push('async function autoScrapeOne(id,btn){');
-  P.push('  var embedUrl=EMBED_BASE+EMBED_PATH+id;');
+  // ⭐ SCRAPE ONE — mv.embedUrl ব্যবহার
+  P.push('async function autoScrapeOne(mv,btn){');
+  P.push('  if(!mv.embedUrl){toast("❌ No embedUrl","err");return}');
   P.push('  var old=btn.textContent;btn.disabled=true;btn.textContent="⏳";');
   P.push('  try{');
-  P.push('    var html=await fetchHtmlBrowser(embedUrl);');
+  P.push('    var html=await fetchHtmlBrowser(mv.embedUrl);');
   P.push('    if(!html)throw new Error("empty");');
   P.push('    var vu=extractUrlFromHtml(html);');
   P.push('    if(!vu){btn.textContent="❌";toast("URL not found — use Bookmarklet","err");setTimeout(function(){btn.textContent=old;btn.disabled=false},2000);return}');
-  P.push('    var r=await fetch("/api/refresh-movie",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({id:id,html:html})});');
+  P.push('    var r=await fetch("/api/refresh-movie",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({id:mv.id,html:html})});');
   P.push('    var d=await r.json();');
   P.push('    if(d.success){btn.textContent="✓";btn.style.background="#4caf50";toast("✅ Saved!")}');
   P.push('    else{btn.textContent="❌";toast(d.error||"Failed","err")}');
@@ -1048,18 +1002,17 @@ function adminPage() {
   P.push('  setTimeout(function(){btn.textContent=old;btn.disabled=false;btn.style.background="#00c853"},3000);');
   P.push('}');
 
-  // AUTO SCRAPE ALL
+  // ⭐ SCRAPE ALL — প্রতিটার mv.embedUrl
   P.push('async function autoScrapeAll(movies){');
-  P.push('  var expired=movies.filter(function(m){if(!m.contentUrl)return true;if(m.urlExpiry&&Date.now()>m.urlExpiry-300000)return true;return false});');
-  P.push('  if(!expired.length){alert("কোনো expired নেই!");return}');
+  P.push('  var expired=movies.filter(function(m){if(!m.embedUrl)return false;if(!m.contentUrl)return true;if(m.urlExpiry&&Date.now()>m.urlExpiry-300000)return true;return false});');
+  P.push('  if(!expired.length){alert("কোনো expired/empty নেই!");return}');
   P.push('  if(!confirm(expired.length+" টি scrape করবে?"))return;');
   P.push('  showProgressModal(expired.length);');
   P.push('  var success=0,failed=0,updates=[];');
   P.push('  for(var i=0;i<expired.length;i++){');
   P.push('    var mv=expired[i];updateProgress(i+1,expired.length,mv.title);');
-  P.push('    var embedUrl=mv.embedUrl||(EMBED_BASE+EMBED_PATH+mv.id);');
   P.push('    try{');
-  P.push('      var html=await fetchHtmlBrowser(embedUrl);');
+  P.push('      var html=await fetchHtmlBrowser(mv.embedUrl);');
   P.push('      if(html){var vu=extractUrlFromHtml(html);if(vu){updates.push({id:mv.id,html:html});success++}else{failed++}}else{failed++}');
   P.push('    }catch(e){failed++}');
   P.push('    await sleep(800);');
@@ -1071,7 +1024,6 @@ function adminPage() {
   P.push('  loadList();');
   P.push('}');
 
-  // FETCH HTML — multiple methods
   P.push('async function fetchHtmlBrowser(url){');
   P.push('  try{var h=await fetchViaIframe(url,7000);if(h&&h.length>200&&(h.indexOf("setVideoUrl")>-1||h.indexOf(".mp4")>-1))return h}catch(e){}');
   P.push('  var proxies=["https://api.allorigins.win/raw?url=","https://corsproxy.io/?url=","https://r.jina.ai/"];');
@@ -1103,7 +1055,6 @@ function adminPage() {
 
   P.push('function sleep(ms){return new Promise(function(r){setTimeout(r,ms)})}');
 
-  // PROGRESS MODAL
   P.push('var progressModal=null;');
   P.push('function showProgressModal(total){');
   P.push('  if(progressModal)return;');
@@ -1115,15 +1066,12 @@ function adminPage() {
   P.push('function updateProgress(cur,total,title){if(!progressModal)return;var pct=Math.round(cur/total*100);document.getElementById("pmText").textContent="("+cur+"/"+total+") "+title;document.getElementById("pmBar").style.width=pct+"%";document.getElementById("pmStats").textContent=pct+"%"};');
   P.push('function hideProgressModal(){if(progressModal){progressModal.remove();progressModal=null}}');
 
-  // EDIT / DELETE
   P.push('async function editMovie(id){var pg=1,all=[];while(true){var r=await fetch("/api/movies?page="+pg+"&noshuffle=1");var d=await r.json();all=all.concat(d.items);if(pg>=d.totalPages)break;pg++}var mv=all.find(function(x){return x.id===id});if(!mv)return;$("eid").value=mv.id;$("title").value=mv.title;$("embedUrl").value=mv.embedUrl||"";$("contentUrl").value=mv.contentUrl||"";$("thumb").value=mv.thumbnail||"";$("vurl").value=mv.videoUrl||"";$("videoIdField").value="";$("ft").textContent="Edit Movie";$("sb").textContent="Update";$("cb").classList.remove("hidden");window.scrollTo({top:0,behavior:"smooth"})}');
   P.push('async function delMovie(id){if(!confirm("Delete?"))return;var r=await fetch("/api/movies/"+encodeURIComponent(id),{method:"DELETE",headers:{"X-Admin-Password":token}});if(r.ok)loadList()}');
 
-  // ADS
   P.push('async function loadAds(){var r=await fetch("/api/ads");var d=await r.json();$("ads").value=d.code||""}');
   P.push('async function saveAds(){var code=$("ads").value;var m=$("adm");var r=await fetch("/api/ads",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({code:code})});if(r.ok){m.textContent="Saved";m.className="msg ok show"}else{m.textContent="Failed";m.className="msg err show"}setTimeout(function(){m.classList.remove("show")},2500)}');
 
-  // INTERVAL
   P.push('async function loadIntervalLink(){try{var r=await fetch("/api/interval-link");var d=await r.json();$("intervalLinkInput").value=d.url||"";$("intervalSecondsInput").value=d.seconds||60;$("intervalFirstDelayInput").value=d.firstDelay||15}catch(e){}}');
   P.push('async function saveIntervalLink(){var u=$("intervalLinkInput").value.trim();var s=parseInt($("intervalSecondsInput").value)||60;var f=parseInt($("intervalFirstDelayInput").value)||15;var m=$("ilm");if(s<5){m.textContent="Min 5s";m.className="msg err show";return}try{var r=await fetch("/api/interval-link",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({url:u,seconds:s,firstDelay:f})});if(r.ok){m.textContent="✅ Saved";m.className="msg ok show"}else{m.textContent="Failed";m.className="msg err show"}}catch(e){m.textContent=e.message;m.className="msg err show"}setTimeout(function(){m.classList.remove("show")},3000)}');
 
