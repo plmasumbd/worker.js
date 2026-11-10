@@ -1,7 +1,6 @@
 const ADMIN_PASSWORD = "admin123";
 const PAGE_SIZE = 20;
-const ONE_DAY = 24 * 60 * 60 * 1000;
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes for signed URLs
+const CACHE_TTL = 5 * 60 * 1000;
 
 export default {
   async fetch(request, env) {
@@ -28,6 +27,9 @@ export default {
     if (p === "/api/movies/track-view" && request.method === "POST") return trackView(request, env);
     if (p === "/api/debug-embed" && request.method === "GET") return debugEmbed(url);
 
+    // 🔥 STREAM PROXY — video streaming through worker
+    if (p === "/api/stream" && request.method === "GET") return streamVideo(request, env, url);
+
     if (p === "/") return html(homePage());
     if (p === "/admin") return html(adminPage());
     if (p === "/watch") return html(watchPage(url.searchParams.get("id")));
@@ -36,22 +38,131 @@ export default {
   }
 };
 
-// ================= URL EXPIRY HELPER (server-side) =================
+// ================= URL EXPIRY =================
 function getUrlExpiry(url) {
   if (!url) return 0;
-  // secure=o23hv_l6MqB8c-qojzLFEQ==,1794317793
   let m = url.match(/[?&]secure=[^,]+,\s*(\d{10})/i);
   if (m) return parseInt(m[1], 10) * 1000;
-  // ?expires=1794317793
   m = url.match(/[?&]expires=(\d{10})/i);
   if (m) return parseInt(m[1], 10) * 1000;
-  // ?e=1794317793
   m = url.match(/[?&]e=(\d{10})/i);
   if (m) return parseInt(m[1], 10) * 1000;
   return 0;
 }
 
-// ================= AUTO-CONTENT (Smart Refresh) =================
+// ================= STREAM PROXY =================
+async function streamVideo(request, env, url) {
+  const id = url.searchParams.get("id");
+  if (!id) return new Response("ID required", { status: 400 });
+
+  const raw = await env.MOVIES.get("movie_list");
+  const list = raw ? JSON.parse(raw) : [];
+  const idx = list.findIndex(m => m.id === id);
+  if (idx === -1) return new Response("Not found", { status: 404 });
+
+  const movie = list[idx];
+  let videoUrl = movie.contentUrl || "";
+  const expiry = getUrlExpiry(videoUrl);
+  const isExpired = expiry > 0 && Date.now() > (expiry - 60000);
+
+  // 🔥 expired বা empty হলে fresh আনি
+  if (!videoUrl || isExpired) {
+    const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
+    if (embedUrl) {
+      try {
+        const fresh = await fetchFreshFromEmbed(embedUrl);
+        if (fresh.contentUrl) {
+          videoUrl = fresh.contentUrl;
+          list[idx].contentUrl = fresh.contentUrl;
+          list[idx].videoUrl = fresh.contentUrl;
+          list[idx].lastRefresh = Date.now();
+          list[idx].urlExpiry = getUrlExpiry(fresh.contentUrl);
+          await env.MOVIES.put("movie_list", JSON.stringify(list));
+        }
+      } catch (e) {}
+    }
+    if (!videoUrl) return new Response("No video", { status: 404 });
+  }
+
+  // 🔥 Proxy fetch with proper headers
+  const range = request.headers.get("Range");
+  const headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": movie.embedUrl || "https://expmle.com/",
+    "Origin": (() => {
+      try { return new URL(movie.embedUrl || videoUrl).origin; } catch (e) { return ""; }
+    })(),
+  };
+  if (range) headers["Range"] = range;
+
+  try {
+    const upstream = await fetch(videoUrl, { headers, redirect: "follow" });
+
+    if (!upstream.ok && upstream.status !== 206) {
+      // fail হলে fresh try
+      const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
+      if (embedUrl) {
+        try {
+          const fresh = await fetchFreshFromEmbed(embedUrl);
+          if (fresh.contentUrl && fresh.contentUrl !== videoUrl) {
+            const h2 = { ...headers };
+            if (range) h2["Range"] = range;
+            const up2 = await fetch(fresh.contentUrl, { headers: h2, redirect: "follow" });
+            if (up2.ok || up2.status === 206) {
+              list[idx].contentUrl = fresh.contentUrl;
+              list[idx].videoUrl = fresh.contentUrl;
+              list[idx].lastRefresh = Date.now();
+              list[idx].urlExpiry = getUrlExpiry(fresh.contentUrl);
+              await env.MOVIES.put("movie_list", JSON.stringify(list));
+              return buildStreamResponse(up2, fresh.contentUrl);
+            }
+          }
+        } catch (e) {}
+      }
+      return new Response("Stream error: " + upstream.status, { status: upstream.status });
+    }
+
+    return buildStreamResponse(upstream, videoUrl);
+  } catch (e) {
+    return new Response("Stream fetch failed: " + e.message, { status: 502 });
+  }
+}
+
+function buildStreamResponse(upstream, videoUrl) {
+  const newHeaders = new Headers();
+  const ct = upstream.headers.get("Content-Type") || guessContentType(videoUrl);
+  newHeaders.set("Content-Type", ct);
+  const cl = upstream.headers.get("Content-Length");
+  if (cl) newHeaders.set("Content-Length", cl);
+  const cr = upstream.headers.get("Content-Range");
+  if (cr) newHeaders.set("Content-Range", cr);
+  const ar = upstream.headers.get("Accept-Ranges");
+  newHeaders.set("Accept-Ranges", ar || "bytes");
+  newHeaders.set("Cache-Control", "public, max-age=3600");
+  newHeaders.set("Access-Control-Allow-Origin", "*");
+  newHeaders.set("Access-Control-Allow-Headers", "Range");
+  newHeaders.set("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges");
+
+  return new Response(upstream.body, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers: newHeaders,
+  });
+}
+
+function guessContentType(url) {
+  const u = (url || "").toLowerCase();
+  if (u.includes(".m3u8")) return "application/vnd.apple.mpegurl";
+  if (u.includes(".ts")) return "video/mp2t";
+  if (u.includes(".mp4")) return "video/mp4";
+  if (u.includes(".webm")) return "video/webm";
+  if (u.includes(".mkv")) return "video/x-matroska";
+  return "video/mp4";
+}
+
+// ================= AUTO-CONTENT =================
 async function autoContent(request, env) {
   try {
     const b = await request.json();
@@ -65,12 +176,10 @@ async function autoContent(request, env) {
     const forceRefresh = b.forceRefresh === true;
     const now = Date.now();
 
-    // 🔥 signed URL expiry check
     const expiry = getUrlExpiry(movie.contentUrl);
-    const isExpired = expiry > 0 && now > (expiry - 60 * 1000); // 1 min buffer
+    const isExpired = expiry > 0 && now > (expiry - 60 * 1000);
     const isFresh = (now - (movie.lastRefresh || 0)) < CACHE_TTL;
 
-    // cached valid link
     if (!forceRefresh && movie.contentUrl && isFresh && !isExpired) {
       return json({ success: true, contentUrl: movie.contentUrl, cached: true });
     }
@@ -118,16 +227,12 @@ async function debugEmbed(url) {
       const text = await fn();
       if (!text) return result.attempts.push({ method: label, error: "empty" });
       const svH = text.match(/(?:html5player\.)?setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]/i);
-      const svL = text.match(/(?:html5player\.)?setVideoUrlLow\s*\(\s*['"]([^'"]+)['"]/i);
-      const sv = text.match(/(?:html5player\.)?setVideoUrl\s*\(\s*['"]([^'"]+)['"]/i);
       result.attempts.push({
         method: label,
         length: text.length,
         foundSetVideoUrlHigh: svH ? svH[1] : null,
-        foundSetVideoUrlLow: svL ? svL[1] : null,
-        foundSetVideoUrl: sv ? sv[1] : null,
-        hasHtml5player: /html5player/i.test(text),
         hasSetVideo: /setVideoUrl/i.test(text),
+        hasHtml5player: /html5player/i.test(text),
         hasSecure: /secure=/i.test(text),
         hasMp4: /\.mp4/i.test(text),
         extracted: extractVideoUrl(text) || null,
@@ -142,29 +247,21 @@ async function debugEmbed(url) {
   };
 
   await tryOne("jina-html", async () => {
-    const r = await fetch("https://r.jina.ai/" + embedUrl, {
-      headers: { "Accept": "text/plain", "X-Return-Format": "html" }
-    });
+    const r = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "html" } });
     return r.ok ? await r.text() : null;
   });
-
   await tryOne("jina-text", async () => {
-    const r = await fetch("https://r.jina.ai/" + embedUrl, {
-      headers: { "Accept": "text/plain", "X-Return-Format": "text" }
-    });
+    const r = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "text" } });
     return r.ok ? await r.text() : null;
   });
-
   await tryOne("allorigins", async () => {
     const r = await fetch("https://api.allorigins.win/raw?url=" + encodeURIComponent(embedUrl));
     return r.ok ? await r.text() : null;
   });
-
   await tryOne("corsproxy", async () => {
     const r = await fetch("https://corsproxy.io/?url=" + encodeURIComponent(embedUrl));
     return r.ok ? await r.text() : null;
   });
-
   await tryOne("direct", async () => {
     const r = await fetch(embedUrl, {
       headers: {
@@ -232,7 +329,7 @@ async function refreshAll(request, env) {
           if (fresh.views) movie.views = fresh.views;
           movie.lastRefresh = Date.now();
           ok++;
-        } else { fail++; failures.push({ id: movie.id, title: movie.title, reason: "no video URL found" }); }
+        } else { fail++; failures.push({ id: movie.id, title: movie.title, reason: "no video URL" }); }
       } catch (e) { fail++; failures.push({ id: movie.id, title: movie.title, reason: e.message }); }
     }
     if (i < list.length - 1) await new Promise(r => setTimeout(r, 2000 + Math.random() * 1000));
@@ -241,7 +338,7 @@ async function refreshAll(request, env) {
   return json({ success: true, ok, fail, failures });
 }
 
-// ================= FETCH EMBED — Universal Extraction =================
+// ================= FETCH FRESH =================
 async function fetchFreshFromEmbed(embedUrl) {
   const out = { contentUrl: "", title: "", thumbnail: "", views: 0, source: "" };
   let text = "";
@@ -256,35 +353,26 @@ async function fetchFreshFromEmbed(embedUrl) {
     return false;
   };
 
-  // 1) Jina HTML (best for JS-rendered)
   if (!text) await tryText(async () => {
-    const r = await fetch("https://r.jina.ai/" + embedUrl, {
-      headers: { "Accept": "text/plain", "X-Return-Format": "html" }
-    });
+    const r = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "html" } });
     if (r.ok) { out.source = "jina-html"; return await r.text(); }
   });
 
-  // 2) Jina text
   if (!text) await tryText(async () => {
-    const r = await fetch("https://r.jina.ai/" + embedUrl, {
-      headers: { "Accept": "text/plain", "X-Return-Format": "text" }
-    });
+    const r = await fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "text" } });
     if (r.ok) { out.source = "jina-text"; return await r.text(); }
   });
 
-  // 3) allorigins
   if (!text) await tryText(async () => {
     const r = await fetch("https://api.allorigins.win/raw?url=" + encodeURIComponent(embedUrl));
     if (r.ok) { out.source = "allorigins"; return await r.text(); }
   });
 
-  // 4) corsproxy
   if (!text) await tryText(async () => {
     const r = await fetch("https://corsproxy.io/?url=" + encodeURIComponent(embedUrl));
     if (r.ok) { out.source = "corsproxy"; return await r.text(); }
   });
 
-  // 5) direct
   if (!text) await tryText(async () => {
     const r = await fetch(embedUrl, {
       headers: {
@@ -299,24 +387,19 @@ async function fetchFreshFromEmbed(embedUrl) {
 
   if (!text) return out;
 
-  // Universal URL extraction
   out.contentUrl = extractVideoUrl(text);
 
-  // Title
   let m = text.match(/<title>([^<]+)<\/title>/i) ||
           text.match(/"name"\s*:\s*"([^"]+)"/i) ||
           text.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)/i);
   if (m) out.title = decodeHtml(m[1]).trim();
 
-  // Thumbnail
   m = text.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)/i) ||
       text.match(/"thumbnailUrl"\s*:\s*\[\s*"([^"]+)"/i) ||
       text.match(/"thumbnailUrl"\s*:\s*"([^"]+)"/i) ||
-      text.match(/"thumbnail"\s*:\s*"([^"]+)"/i) ||
       text.match(/"poster"\s*:\s*"([^"]+)"/i);
   if (m) out.thumbnail = decodeHtml(m[1]);
 
-  // Views
   m = text.match(/"userInteractionCount"\s*:\s*"?(\d+)"?/i) ||
       text.match(/(\d[\d,]+)\s*views/i);
   if (m) out.views = parseInt(m[1].replace(/,/g, ""), 10) || 0;
@@ -324,7 +407,7 @@ async function fetchFreshFromEmbed(embedUrl) {
   return out;
 }
 
-// ================= UNIVERSAL VIDEO URL EXTRACTOR =================
+// ================= UNIVERSAL EXTRACTOR =================
 function extractVideoUrl(text) {
   const clean = (u) => u
     .replace(/\\\//g, "/")
@@ -336,36 +419,21 @@ function extractVideoUrl(text) {
     .trim();
 
   const patterns = [
-    // 🔥 html5player.setVideoUrlHigh/Low/Url — MOST IMPORTANT
     /(?:html5player\.)?setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]/i,
     /(?:html5player\.)?setVideoUrlLow\s*\(\s*['"]([^'"]+)['"]/i,
     /(?:html5player\.)?setVideoUrl\s*\(\s*['"]([^'"]+)['"]/i,
-
-    // JSON-LD
     /"contentUrl"\s*:\s*"([^"]+)"/i,
     /"embedUrl"\s*:\s*"([^"]+)"/i,
-
-    // JW/Video.js/Plyr
     /(?:file|src|source|url)\s*[:=]\s*['"]([^'"]+\.(?:mp4|m3u8|webm|mkv)[^'"]*)['"]/i,
     /"sources"\s*:\s*\[\s*\{[^}]*"(?:file|src)"\s*:\s*"([^"]+)"/i,
     /\.setup\s*\(\s*\{[^}]*["']?(?:file|src)["']?\s*:\s*["']([^"']+)/i,
     /\.src\s*\(\s*['"]([^'"]+\.(?:mp4|m3u8)[^'"]*)['"]/i,
-
-    // HTML5 tags
     /<video[^>]*\ssrc\s*=\s*["']([^"']+)["']/i,
     /<source[^>]*\ssrc\s*=\s*["']([^"']+)["']/i,
-
-    // Variables
     /(?:var|let|const)\s+(?:videoUrl|file|source|stream|hls|mp4|url)\s*=\s*['"]([^'"]+\.(?:mp4|m3u8)[^'"]*)['"]/i,
-
-    // Data attrs
     /data-(?:src|video|file|url|source)\s*=\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/i,
-
-    // Direct media
     /(https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*)/i,
     /(https?:\/\/[^"'\s<>]+\.mp4[^"'\s<>]*)/i,
-
-    // secure= / token=
     /(https?:\/\/[^"'\s<>]+[?&](?:secure|token|hash|sig|expires)=[^"'\s<>]+)/i,
   ];
 
@@ -378,33 +446,15 @@ function extractVideoUrl(text) {
       }
     }
   }
-
-  // Base64
-  const b64matches = text.match(/atob\s*\(\s*['"]([A-Za-z0-9+/=]{20,})['"]\s*\)/g) || [];
-  for (const b of b64matches) {
-    const inner = b.match(/['"]([A-Za-z0-9+/=]{20,})['"]/);
-    if (inner) {
-      try {
-        const decoded = atob(inner[1]);
-        if (/^https?:\/\//i.test(decoded) && /\.(mp4|m3u8)/i.test(decoded)) return decoded;
-      } catch (e) {}
-    }
-  }
-
   return "";
 }
 
 function decodeHtml(s) {
   return String(s)
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ");
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ");
 }
 
-// ================= DERIVE EMBED URL (UUID-safe) =================
 function deriveEmbedUrl(movie) {
   if (movie.embedUrl && /^https?:\/\//i.test(movie.embedUrl)) return movie.embedUrl;
   if (movie.sourceUrl && /^https?:\/\//i.test(movie.sourceUrl)) return movie.sourceUrl;
@@ -413,14 +463,12 @@ function deriveEmbedUrl(movie) {
     if (m) return m[1];
     if (/embedframe/i.test(movie.videoUrl) && /^https?:\/\//i.test(movie.videoUrl)) return movie.videoUrl;
   }
-  // 🔥 UUID-friendly: allow hyphen
   if (movie.id && /^[a-z0-9\-]+$/i.test(String(movie.id))) {
     return "https://expmle.com/embedframe/" + movie.id;
   }
   return "";
 }
 
-// ================= FETCH SOURCE =================
 async function fetchSourceData(request) {
   try {
     const body = await request.json();
@@ -469,7 +517,6 @@ async function fetchSourceData(request) {
   } catch (err) { return json({ error: "Scraping failed: " + err.message }, 500); }
 }
 
-// ================= HELPERS =================
 function extractSrc(input) {
   if (!input) return "";
   const s = input.trim();
@@ -524,7 +571,7 @@ async function listMovies(env, url) {
   return json({ items: list.slice(start, start + PAGE_SIZE), page, totalPages: pages, total });
 }
 
-// ================= ADD / UPDATE / DELETE =================
+// ================= ADD/UPDATE/DELETE =================
 async function addMovie(request, env) {
   const auth = request.headers.get("X-Admin-Password");
   if (auth !== ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
@@ -729,8 +776,6 @@ function watchPage(id) {
   p.push('.meta{margin-top:10px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;color:#aaa;font-size:14px}');
   p.push('.meta .views{color:#ff9800;font-weight:600}');
   p.push('.actions{margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding-bottom:16px;border-bottom:1px solid #222}');
-  p.push('.act-btn{background:#1c1c1c;color:#eee;border:1px solid #333;padding:9px 16px;border-radius:8px;cursor:pointer;font-size:14px}');
-  p.push('.act-btn:hover{background:#ff0040;border-color:#ff0040}');
   p.push('.ad{margin:20px 0;text-align:center;overflow:hidden}');
   p.push('.section-title{margin:32px 0 16px;font-size:18px;font-weight:700;color:#fff;display:flex;align-items:center;gap:10px}');
   p.push('.section-title:before{content:"";width:4px;height:22px;background:#ff0040;border-radius:2px}');
@@ -765,7 +810,6 @@ function watchPage(id) {
   p.push('</div>');
   p.push('<div class="title" id="t">Loading...</div>');
   p.push('<div class="meta" id="metaBar"></div>');
-  p.push('<div class="actions" id="actBar"></div>');
   p.push('<div class="ad" id="adBox"></div>');
   p.push('<div class="section-title">🎬 You May Also Like</div>');
   p.push('<div class="related-grid" id="relatedGrid"></div>');
@@ -776,7 +820,6 @@ function watchPage(id) {
   p.push('function $(i){return document.getElementById(i)}');
   p.push('function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c]})}');
   p.push('function fmt(n){n=parseInt(n)||0;if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1e3)return(n/1e3).toFixed(1)+"K";return n}');
-  p.push('function getUrlExpiry(url){if(!url)return 0;var m=url.match(/[?&]secure=[^,]+,\\s*(\\d{10})/i);if(m)return parseInt(m[1],10)*1000;var m2=url.match(/[?&]expires=(\\d{10})/i);if(m2)return parseInt(m2[1],10)*1000;return 0}');
   p.push('function markWatched(id){try{var a=JSON.parse(localStorage.getItem("watched_ids")||"[]");var s=String(id);if(a.indexOf(s)===-1)a.push(s);if(a.length>500)a=a.slice(-500);localStorage.setItem("watched_ids",JSON.stringify(a))}catch(e){}}');
   p.push('function injectAds(id,code){var c=$(id);if(!c)return;c.innerHTML="";var t=document.createElement("div");t.innerHTML=code;var sc=[];Array.from(t.childNodes).forEach(function(n){if(n.tagName==="SCRIPT"){var s=document.createElement("script");if(n.src)s.src=n.src;else s.textContent=n.textContent;sc.push(s)}else{c.appendChild(n.cloneNode(true))}});sc.forEach(function(s){c.appendChild(s)})}');
   p.push('var id=new URLSearchParams(location.search).get("id");');
@@ -793,20 +836,9 @@ function watchPage(id) {
   p.push('  $("videoError").classList.remove("show");');
   p.push('  $("loadingBox").style.display="flex";');
   p.push('  $("loaderText").textContent="Loading video...";');
-  p.push('  var contentUrl=movieData.contentUrl||"";');
-  p.push('  var expiry=getUrlExpiry(contentUrl);');
-  p.push('  var isExpired=expiry>0 && Date.now()>(expiry-60000);');
-  p.push('  if(contentUrl && !isExpired){ playContent(contentUrl); return; }');
-  p.push('  $("loaderText").textContent=isExpired?"Refreshing expired link...":"Preparing video...";');
-  p.push('  await fetchFresh();');
-  p.push('}');
-  p.push('async function fetchFresh(){');
-  p.push('  try{');
-  p.push('    var r=await fetch("/api/auto-content",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:movieData.id,forceRefresh:true})});');
-  p.push('    var d=await r.json();');
-  p.push('    if(r.ok && d.contentUrl){ movieData.contentUrl=d.contentUrl; movieData.lastRefresh=Date.now(); playContent(d.contentUrl); return true; }');
-  p.push('  }catch(e){ console.log("fetchFresh error:",e); }');
-  p.push('  return false;');
+  // 🔥 KEY: ALWAYS use stream proxy — never direct contentUrl
+  p.push('  var streamUrl="/api/stream?id="+encodeURIComponent(movieData.id);');
+  p.push('  playContent(streamUrl);');
   p.push('}');
   p.push('function playContent(url){');
   p.push('  var pb=$("pb");');
@@ -814,21 +846,20 @@ function watchPage(id) {
   p.push('  v.src=url;v.controls=true;v.autoplay=true;v.playsInline=true;v.setAttribute("playsinline","");');
   p.push('  v.style.cssText="width:100%;height:100%;object-fit:contain;background:#000";');
   p.push('  v.onloadeddata=function(){ $("loadingBox").style.display="none"; };');
-  p.push('  v.onerror=async function(){');
-  p.push('    console.log("Video error - auto refreshing...");');
+  p.push('  v.onerror=function(){');
+  p.push('    console.log("Stream failed, retrying once...");');
   p.push('    if(refreshAttempted){ showVideoError(); return; }');
   p.push('    refreshAttempted=true;');
   p.push('    $("loadingBox").style.display="flex";');
   p.push('    $("loaderText").textContent="Refreshing link...";');
-  p.push('    var ok=await fetchFresh();');
-  p.push('    if(!ok){ showVideoError(); }');
+  p.push('    setTimeout(function(){ pb.innerHTML=""; playContent("/api/stream?id="+encodeURIComponent(movieData.id)+"&t="+Date.now()); }, 1500);');
   p.push('  };');
   p.push('  setTimeout(function(){');
   p.push('    if($("loadingBox").style.display!=="none" && v.readyState<2){');
   p.push('      if(refreshAttempted){ showVideoError(); }');
   p.push('      else { v.onerror(); }');
   p.push('    }');
-  p.push('  },20000);');
+  p.push('  },25000);');
   p.push('  pb.innerHTML="";pb.appendChild(v);');
   p.push('  trackView();');
   p.push('  try{fetch("/api/ads").then(function(r){return r.json()}).then(function(ad){if(ad.code&&ad.code.trim())injectAds("adBox",ad.code)})}catch(e){}');
@@ -876,7 +907,6 @@ function adminPage() {
   p.push('.tabs button{padding:10px 20px;background:#1c1c1c;color:#eee;border:1px solid #333;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600}');
   p.push('.tabs button.active{background:#ff0040;border-color:#ff0040}');
   p.push('.paste-box{background:#1a2a3a;border:1px dashed #00c853;padding:15px;border-radius:8px;margin-bottom:20px}');
-  p.push('code{background:#111;color:#00c853;padding:2px 6px;border-radius:4px;font-size:12px}');
   p.push('</style></head><body>');
   p.push('<header><h1>Admin Panel</h1><a href="/">Home</a></header>');
   p.push('<div class="wrap">');
@@ -924,9 +954,7 @@ function adminPage() {
   p.push('  if(!text||!text.trim()){m.textContent="View Source পেস্ট করুন";m.className="msg err show";return}');
   p.push('  var found=[];');
   p.push('  var title="";');
-  p.push('  var tm=text.match(/<meta[^>]*name\\s*=\\s*["\']description["\'][^>]*content\\s*=\\s*["\']([^"\']+)["\']/i);');
-  p.push('  if(!tm)tm=text.match(/<meta[^>]*content\\s*=\\s*["\']([^"\']+)["\'][^>]*name\\s*=\\s*["\']description["\']/i);');
-  p.push('  if(!tm)tm=text.match(/<title>([^<]+)<\\/title>/i);');
+  p.push('  var tm=text.match(/<title>([^<]+)<\\/title>/i);');
   p.push('  if(tm){title=tm[1].trim();found.push("Title")}');
   p.push('  var embedUrl="";');
   p.push('  var iframes=text.match(/<iframe[\\s\\S]*?>/gi)||[];');
@@ -941,7 +969,6 @@ function adminPage() {
   p.push('  if(cm){contentUrl=cm[1].replace(/&amp;/g,"&").replace(/\\\\\\//g,"/");found.push("Content URL")}');
   p.push('  var thumb="";');
   p.push('  var thm=text.match(/"thumbnailUrl"\\s*:\\s*\\[\\s*"([^"]+)"/i);if(!thm)thm=text.match(/"thumbnailUrl"\\s*:\\s*"([^"]+)"/i);');
-  p.push('  if(!thm)thm=text.match(/<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)/i);');
   p.push('  if(thm){thumb=thm[1].replace(/&amp;/g,"&");found.push("Thumbnail")}');
   p.push('  if(title)$("title").value=title;');
   p.push('  if(embedUrl)$("embedUrl").value=embedUrl;');
@@ -966,8 +993,8 @@ function adminPage() {
   p.push('  }catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}');
   p.push('}');
   p.push('async function refreshOne(id,btn){btn.disabled=true;var old=btn.textContent;btn.textContent="⏳";try{var r=await fetch("/api/refresh-movie",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({id:id})});var d=await r.json();if(r.ok){btn.textContent="✓"}else{btn.textContent="✗";alert(d.error||"Failed")}}catch(e){btn.textContent="✗";alert(e.message)}setTimeout(function(){btn.textContent=old;btn.disabled=false},1500)}');
-  p.push('async function refreshAllBtn(){if(!confirm("সব refresh করবে? (২-৩ সেকেন্ড পর পর)"))return;var b=$("refreshAllTop");if(b){b.disabled=true;b.textContent="⏳ Refreshing..."}try{var r=await fetch("/api/refresh-all",{method:"POST",headers:{"X-Admin-Password":token}});var d=await r.json();if(r.ok){var msg="OK: "+d.ok+"  Fail: "+d.fail;if(d.failures&&d.failures.length){msg+="\\n\\nপ্রথম ১০টা:\\n"+d.failures.slice(0,10).map(function(f){return "• "+f.title+": "+f.reason}).join("\\n")}alert(msg)}else{alert(d.error||"Failed")}}catch(e){alert(e.message)}if(b){b.disabled=false;b.textContent="🔄 Refresh All"}loadList()}');
-  p.push('async function loadList(){var pg=1,all=[];while(true){var r=await fetch("/api/movies?page="+pg+"&noshuffle=1");var d=await r.json();all=all.concat(d.items);if(pg>=d.totalPages)break;pg++}var el=$("list");if(!all.length){el.innerHTML=\'<p style="color:#666">No movies</p>\';return}el.innerHTML="";var hdr=document.createElement("div");hdr.style.cssText="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px";hdr.innerHTML=\'<div style="font-size:14px;color:#888">Total: \'+all.length+\'</div>\';var refAll=document.createElement("button");refAll.id="refreshAllTop";refAll.className="primary small";refAll.style.background="#ff9800";refAll.style.marginTop="0";refAll.textContent="🔄 Refresh All";refAll.onclick=refreshAllBtn;hdr.appendChild(refAll);el.appendChild(hdr);all.forEach(function(mv){var s=mv.thumbnail?"background-image:url(\'"+mv.thumbnail+"\')":"";var row=document.createElement("div");row.className="item";var hasC=mv.contentUrl?"✅":"⚠️";var expiry=mv.urlExpiry?" • exp:"+new Date(mv.urlExpiry).toLocaleTimeString():" • no-expiry";var info=document.createElement("div");info.className="info";info.innerHTML=\'<div class="mini" style="\'+s+\'"></div><div><h4>\'+esc(mv.title)+\' \'+hasC+\'</h4><div class="stats">👁 \'+fmt(mv.views||0)+expiry+\'</div></div>\';var acts=document.createElement("div");acts.className="acts";var rb=document.createElement("button");rb.className="primary small";rb.style.background="#ff9800";rb.style.marginTop="0";rb.textContent="🔄 Refresh";rb.onclick=function(){refreshOne(mv.id,rb)};var eb=document.createElement("button");eb.className="primary small";eb.style.marginTop="0";eb.textContent="Edit";eb.onclick=function(){editMovie(mv.id)};var db=document.createElement("button");db.className="primary small danger";db.style.marginTop="0";db.textContent="Delete";db.onclick=function(){delMovie(mv.id)};acts.appendChild(rb);acts.appendChild(eb);acts.appendChild(db);row.appendChild(info);row.appendChild(acts);el.appendChild(row)})}');
+  p.push('async function refreshAllBtn(){if(!confirm("সব refresh করবে?"))return;var b=$("refreshAllTop");if(b){b.disabled=true;b.textContent="⏳ Refreshing..."}try{var r=await fetch("/api/refresh-all",{method:"POST",headers:{"X-Admin-Password":token}});var d=await r.json();if(r.ok){var msg="OK: "+d.ok+"  Fail: "+d.fail;if(d.failures&&d.failures.length){msg+="\\n\\nপ্রথম ১০টা:\\n"+d.failures.slice(0,10).map(function(f){return "• "+f.title+": "+f.reason}).join("\\n")}alert(msg)}else{alert(d.error||"Failed")}}catch(e){alert(e.message)}if(b){b.disabled=false;b.textContent="🔄 Refresh All"}loadList()}');
+  p.push('async function loadList(){var pg=1,all=[];while(true){var r=await fetch("/api/movies?page="+pg+"&noshuffle=1");var d=await r.json();all=all.concat(d.items);if(pg>=d.totalPages)break;pg++}var el=$("list");if(!all.length){el.innerHTML=\'<p style="color:#666">No movies</p>\';return}el.innerHTML="";var hdr=document.createElement("div");hdr.style.cssText="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px";hdr.innerHTML=\'<div style="font-size:14px;color:#888">Total: \'+all.length+\'</div>\';var refAll=document.createElement("button");refAll.id="refreshAllTop";refAll.className="primary small";refAll.style.background="#ff9800";refAll.style.marginTop="0";refAll.textContent="🔄 Refresh All";refAll.onclick=refreshAllBtn;hdr.appendChild(refAll);el.appendChild(hdr);all.forEach(function(mv){var s=mv.thumbnail?"background-image:url(\'"+mv.thumbnail+"\')":"";var row=document.createElement("div");row.className="item";var hasC=mv.contentUrl?"✅":"⚠️";var info=document.createElement("div");info.className="info";info.innerHTML=\'<div class="mini" style="\'+s+\'"></div><div><h4>\'+esc(mv.title)+\' \'+hasC+\'</h4><div class="stats">👁 \'+fmt(mv.views||0)+\'</div></div>\';var acts=document.createElement("div");acts.className="acts";var rb=document.createElement("button");rb.className="primary small";rb.style.background="#ff9800";rb.style.marginTop="0";rb.textContent="🔄 Refresh";rb.onclick=function(){refreshOne(mv.id,rb)};var eb=document.createElement("button");eb.className="primary small";eb.style.marginTop="0";eb.textContent="Edit";eb.onclick=function(){editMovie(mv.id)};var db=document.createElement("button");db.className="primary small danger";db.style.marginTop="0";db.textContent="Delete";db.onclick=function(){delMovie(mv.id)};acts.appendChild(rb);acts.appendChild(eb);acts.appendChild(db);row.appendChild(info);row.appendChild(acts);el.appendChild(row)})}');
   p.push('async function editMovie(id){var pg=1,all=[];while(true){var r=await fetch("/api/movies?page="+pg+"&noshuffle=1");var d=await r.json();all=all.concat(d.items);if(pg>=d.totalPages)break;pg++}var mv=all.find(function(x){return x.id===id});if(!mv)return;$("eid").value=mv.id;$("title").value=mv.title;$("embedUrl").value=mv.embedUrl||"";$("contentUrl").value=mv.contentUrl||"";$("thumb").value=mv.thumbnail||"";$("vurl").value=mv.videoUrl||"";$("videoIdField").value="";$("ft").textContent="Edit Movie";$("sb").textContent="Update";$("cb").classList.remove("hidden");window.scrollTo({top:0,behavior:"smooth"})}');
   p.push('async function delMovie(id){if(!confirm("Delete?"))return;var r=await fetch("/api/movies/"+encodeURIComponent(id),{method:"DELETE",headers:{"X-Admin-Password":token}});if(r.ok)loadList()}');
   p.push('async function loadAds(){var r=await fetch("/api/ads");var d=await r.json();$("ads").value=d.code||""}');
