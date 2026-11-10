@@ -6,7 +6,7 @@ const PAGE_SIZE = 20;
 const CACHE_TTL = 5 * 60 * 1000;
 const URL_SAFETY_MARGIN = 90 * 1000;
 
-const EMBED_BASE = "https://expmle.com";   // ⬅️ আপনার embed domain
+const EMBED_BASE = "https://www.xnxx.com/";   // ⬅️ আপনার embed domain
 const EMBED_PATH = "/embedframe/";         // ⬅️ path
 const FALLBACK_REFERER = EMBED_BASE + "/";
 
