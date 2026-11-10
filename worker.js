@@ -29,6 +29,7 @@ export default {
     if (p === "/api/refresh-movie" && request.method === "POST") return refreshMovie(request, env);
     if (p === "/api/refresh-all" && request.method === "POST") return refreshAll(request, env);
     if (p === "/api/bulk-update-links" && request.method === "POST") return bulkUpdateLinks(request, env);
+    if (p === "/api/silent-refresh" && request.method === "POST") return silentRefresh(request, env);
     if (p === "/api/auto-content" && request.method === "POST") return autoContent(request, env);
     if (p === "/api/movies/related" && request.method === "GET") return getRelatedMovies(env, url);
     if (p === "/api/movies/trending" && request.method === "GET") return getTrendingMovies(env);
@@ -45,6 +46,9 @@ export default {
   async scheduled(event, env, ctx) { ctx.waitUntil(autoRefreshAll(env)); }
 };
 
+// ═══════════════════════════════════════════════════════════
+// 🔗 URL Expiry
+// ═══════════════════════════════════════════════════════════
 function getUrlExpiry(url) {
   if (!url) return 0;
   const s = String(url);
@@ -67,6 +71,9 @@ function isUrlExpired(url) {
   return Date.now() > (exp - URL_SAFETY_MARGIN);
 }
 
+// ═══════════════════════════════════════════════════════════
+// 🎬 Stream
+// ═══════════════════════════════════════════════════════════
 async function streamVideo(request, env, url) {
   const id = url.searchParams.get("id");
   if (!id) return new Response("ID required", { status: 400 });
@@ -163,6 +170,9 @@ function guessContentType(url) {
   return "video/mp4";
 }
 
+// ═══════════════════════════════════════════════════════════
+// 🎯 Fetch Fresh
+// ═══════════════════════════════════════════════════════════
 async function fetchFreshFromEmbed(embedUrl) {
   const out = { contentUrl: "", title: "", thumbnail: "", views: 0, source: "" };
   let text = "";
@@ -248,6 +258,9 @@ function deriveEmbedUrl(movie) {
   return "";
 }
 
+// ═══════════════════════════════════════════════════════════
+// 🐛 Debug
+// ═══════════════════════════════════════════════════════════
 async function debugEmbed(url) {
   const embedUrl = url.searchParams.get("url");
   if (!embedUrl) return json({ error: "url param required" }, 400);
@@ -266,6 +279,9 @@ async function debugEmbed(url) {
   return json(result);
 }
 
+// ═══════════════════════════════════════════════════════════
+// 🔄 Refresh
+// ═══════════════════════════════════════════════════════════
 async function refreshMovie(request, env) {
   const auth = request.headers.get("X-Admin-Password");
   if (auth !== ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
@@ -368,6 +384,42 @@ async function bulkUpdateLinks(request, env) {
   return json({ success: true, ok, fail });
 }
 
+// ═══════════════════════════════════════════════════════════
+// 🤫 Silent Refresh — user browser থেকে silently
+// ═══════════════════════════════════════════════════════════
+async function silentRefresh(request, env) {
+  try {
+    const b = await request.json();
+    if (!b.id || !b.videoUrl) return json({ ok: false }, 400);
+    const url = String(b.videoUrl).trim();
+    if (!/^https?:\/\//i.test(url)) return json({ ok: false }, 400);
+    if (url.length > 3000) return json({ ok: false }, 400);
+    if (!/\.(mp4|m3u8|webm)/i.test(url) && !/[?&]secure=/i.test(url)) return json({ ok: false }, 400);
+    const raw = await env.MOVIES.get("movie_list");
+    const list = raw ? JSON.parse(raw) : [];
+    const idx = list.findIndex(m => m.id === b.id);
+    if (idx === -1) return json({ ok: false }, 404);
+    const movie = list[idx];
+    const now = Date.now();
+    const expired = isUrlExpired(movie.contentUrl);
+    const missing = !movie.contentUrl;
+    const tooRecent = (now - (movie.lastRefresh || 0)) < 30000;
+    if (!expired && !missing) return json({ ok: true, cached: true });
+    if (tooRecent) return json({ ok: true, recent: true });
+    list[idx].contentUrl = url;
+    list[idx].videoUrl = url;
+    list[idx].urlExpiry = getUrlExpiry(url);
+    list[idx].lastRefresh = now;
+    await env.MOVIES.put("movie_list", JSON.stringify(list));
+    return json({ ok: true });
+  } catch (e) {
+    return json({ ok: false }, 500);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 🤖 Auto Content
+// ═══════════════════════════════════════════════════════════
 async function autoContent(request, env) {
   try {
     const b = await request.json();
@@ -398,6 +450,9 @@ async function autoContent(request, env) {
   } catch (e) { return json({ error: e.message }, 500); }
 }
 
+// ═══════════════════════════════════════════════════════════
+// 🛠 Helpers
+// ═══════════════════════════════════════════════════════════
 async function fetchSourceData(request) {
   try {
     const body = await request.json();
@@ -441,6 +496,9 @@ function hashString(str) { let h = 2166136261; for (let i = 0; i < str.length; i
 function json(d, s) { return new Response(JSON.stringify(d), { status: s || 200, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }); }
 function html(s) { return new Response(s, { headers: { "Content-Type": "text/html; charset=utf-8" } }); }
 
+// ═══════════════════════════════════════════════════════════
+// 📋 List & CRUD
+// ═══════════════════════════════════════════════════════════
 async function listMovies(env, url) {
   const page = parseInt(url.searchParams.get("page") || "1");
   const search = (url.searchParams.get("search") || "").toLowerCase().trim();
@@ -524,6 +582,9 @@ async function deleteMovie(request, env, path) {
   return json({ success: true });
 }
 
+// ═══════════════════════════════════════════════════════════
+// 🔐 Auth / Ads / Interval
+// ═══════════════════════════════════════════════════════════
 async function login(request) { const b = await request.json(); if (b.password === ADMIN_PASSWORD) return json({ success: true, token: ADMIN_PASSWORD }); return json({ error: "ভুল পাসওয়ার্ড" }, 401); }
 async function checkAuth(request) { const a = request.headers.get("X-Admin-Password"); if (a === ADMIN_PASSWORD) return json({ valid: true }); return json({ valid: false }, 401); }
 async function getAds(env) { return json({ code: (await env.MOVIES.get("ads_code")) || "" }); }
@@ -545,6 +606,9 @@ async function saveIntervalLink(request, env) {
   return json({ success: true });
 }
 
+// ═══════════════════════════════════════════════════════════
+// 📄 Single / Related / Trending / View
+// ═══════════════════════════════════════════════════════════
 async function getSingleMovie(env, url) {
   const id = url.searchParams.get("id");
   if (!id) return json({ error: "ID required" }, 400);
@@ -584,6 +648,9 @@ async function trackView(request, env) {
   } catch (e) { return json({ error: e.message }, 500); }
 }
 
+// ═══════════════════════════════════════════════════════════
+// 🏠 Home Page — with silent background scrape
+// ═══════════════════════════════════════════════════════════
 function homePage() {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AdultMovie</title>
 <style>
@@ -615,12 +682,62 @@ function esc(s){return String(s).replace(/[&<>]/g,function(c){return{"&":"&amp;"
 function triggerSearch(){S=$("searchInput").value.trim();P=1;load(1)}
 function injectAds(id,code){var c=$(id);if(!c)return;c.innerHTML="";var t=document.createElement("div");t.innerHTML=code;var sc=[];Array.from(t.childNodes).forEach(function(n){if(n.tagName==="SCRIPT"){var s=document.createElement("script");if(n.src)s.src=n.src;else s.textContent=n.textContent;sc.push(s)}else{c.appendChild(n.cloneNode(true))}});sc.forEach(function(s){c.appendChild(s)})}
 async function loadAds(){try{var r=await fetch("/api/ads");var d=await r.json();if(d.code&&d.code.trim()){injectAds("adTop",d.code);injectAds("adBot",d.code)}}catch(e){}}
-async function load(p){P=p;var u="/api/movies?page="+p+"&seed="+encodeURIComponent(SEED);var w=getWatched().join(",");if(w)u+="&watched="+encodeURIComponent(w);if(S)u+="&search="+encodeURIComponent(S);try{var r=await fetch(u);var d=await r.json();var g=$("grid");g.innerHTML="";if(!d.items||!d.items.length){g.innerHTML='<div class="empty">No videos</div>';$("pager").innerHTML="";return}var ws={};getWatched().forEach(function(x){ws[String(x)]=1});d.items.forEach(function(m){var a=document.createElement("div");a.className="card";var s=m.thumbnail?"background-image:url('"+m.thumbnail+"')":"";var badge=ws[String(m.id)]?'<div class="watched-badge">✓ Watched</div>':"";var v=m.views||(Math.floor(Math.random()*4500)+500);a.innerHTML='<div class="thumb" style="'+s+'">'+badge+'<div class="views-badge">👁 '+fmt(v)+'</div><div class="play">▶</div></div><div class="info"><h3>'+esc(m.title)+'</h3></div>';a.onclick=function(){location.href="/watch?id="+m.id};g.appendChild(a)});pager(d.page,d.totalPages)}catch(e){$("grid").innerHTML='<div class="empty">Error</div>'}}
+
+// ⭐ Silent scraper helpers
+function hiddenIframe(url){
+  return new Promise(function(resolve){
+    var ifr=document.createElement("iframe");
+    ifr.style.cssText="position:fixed;top:0;left:0;width:1px;height:1px;opacity:0.01;pointer-events:none;z-index:-9999";
+    ifr.src=url;var done=false;
+    var timer=setTimeout(function(){if(done)return;done=true;try{document.body.removeChild(ifr)}catch(e){};resolve(null)},7000);
+    ifr.onload=function(){
+      if(done)return;
+      setTimeout(function(){
+        try{
+          var doc=ifr.contentDocument||ifr.contentWindow.document;
+          if(!doc)throw new Error("no doc");
+          var html=doc.documentElement.outerHTML;
+          if(!html||html.length<100)throw new Error("empty");
+          done=true;clearTimeout(timer);try{document.body.removeChild(ifr)}catch(e){};resolve(html)
+        }catch(e){done=true;clearTimeout(timer);try{document.body.removeChild(ifr)}catch(e2){};resolve(null)}
+      },1500)
+    };
+    document.body.appendChild(ifr)
+  })
+}
+function extractUrl(html){
+  var pats=[/setVideoUrlHigh\\s*\\(\\s*['"]([^'"]+)['"]/i,/setVideoUrlLow\\s*\\(\\s*['"]([^'"]+)['"]/i,/setVideoUrl\\s*\\(\\s*['"]([^'"]+)['"]/i,/"contentUrl"\\s*:\\s*"([^"]+)"/i,/(https?:\\/\\/[^"'\\s<>]+\\.mp4[^"'\\s<>]*)/i,/(https?:\\/\\/[^"'\\s<>]+\\.m3u8[^"'\\s<>]*)/i];
+  for(var i=0;i<pats.length;i++){var m=html.match(pats[i]);if(m&&m[1])return m[1].replace(/\\\\\\//g,"/").replace(/&amp;/g,"&").replace(/\\\\/g,"")}
+  return ""
+}
+async function silentScrape(movie){
+  if(!movie||!movie.embedUrl)return false;
+  var needs=!movie.contentUrl||(movie.urlExpiry&&Date.now()>movie.urlExpiry-60000);
+  if(!needs)return false;
+  try{
+    var html=await hiddenIframe(movie.embedUrl);
+    if(!html)return false;
+    var url=extractUrl(html);
+    if(!url)return false;
+    var r=await fetch("/api/silent-refresh",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:movie.id,videoUrl:url})});
+    var d=await r.json();
+    return d&&d.ok===true;
+  }catch(e){return false}
+}
+function bgScrape(movies){
+  var c=movies.filter(function(m){if(!m.embedUrl)return false;if(!m.contentUrl)return true;if(m.urlExpiry&&Date.now()>m.urlExpiry-120000)return true;return false}).slice(0,3);
+  c.forEach(function(mv,i){setTimeout(function(){silentScrape(mv)},5000+i*3000)})
+}
+
+async function load(p){P=p;var u="/api/movies?page="+p+"&seed="+encodeURIComponent(SEED);var w=getWatched().join(",");if(w)u+="&watched="+encodeURIComponent(w);if(S)u+="&search="+encodeURIComponent(S);try{var r=await fetch(u);var d=await r.json();var g=$("grid");g.innerHTML="";if(!d.items||!d.items.length){g.innerHTML='<div class="empty">No videos</div>';$("pager").innerHTML="";return}var ws={};getWatched().forEach(function(x){ws[String(x)]=1});d.items.forEach(function(m){var a=document.createElement("div");a.className="card";var s=m.thumbnail?"background-image:url('"+m.thumbnail+"')":"";var badge=ws[String(m.id)]?'<div class="watched-badge">✓ Watched</div>':"";var v=m.views||(Math.floor(Math.random()*4500)+500);a.innerHTML='<div class="thumb" style="'+s+'">'+badge+'<div class="views-badge">👁 '+fmt(v)+'</div><div class="play">▶</div></div><div class="info"><h3>'+esc(m.title)+'</h3></div>';a.onclick=function(){location.href="/watch?id="+m.id};g.appendChild(a)});pager(d.page,d.totalPages);try{bgScrape(d.items)}catch(e){}}catch(e){$("grid").innerHTML='<div class="empty">Error</div>'}}
 function pager(c,t){var el=$("pager");el.innerHTML="";if(t<=1)return;var pv=document.createElement("button");pv.textContent="« Prev";pv.disabled=c===1;pv.onclick=function(){load(c-1)};el.appendChild(pv);var st=Math.max(1,c-2),en=Math.min(t,st+4);if(en-st<4)st=Math.max(1,en-4);for(var i=st;i<=en;i++){(function(i){var b=document.createElement("button");b.textContent=i;if(i===c)b.classList.add("active");b.onclick=function(){load(i)};el.appendChild(b)})(i)}var nx=document.createElement("button");nx.textContent="Next »";nx.disabled=c===t;nx.onclick=function(){load(c+1)};el.appendChild(nx)}
 loadAds();load(1);
 </script></body></html>`;
 }
 
+// ═══════════════════════════════════════════════════════════
+// 🎬 Watch Page — with silent scrape
+// ═══════════════════════════════════════════════════════════
 function watchPage(id) {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Watch</title>
 <style>
@@ -685,6 +802,53 @@ function markWatched(id){try{var a=JSON.parse(localStorage.getItem("watched_ids"
 function injectAds(id,code){var c=$(id);if(!c)return;c.innerHTML="";var t=document.createElement("div");t.innerHTML=code;var sc=[];Array.from(t.childNodes).forEach(function(n){if(n.tagName==="SCRIPT"){var s=document.createElement("script");if(n.src)s.src=n.src;else s.textContent=n.textContent;sc.push(s)}else{c.appendChild(n.cloneNode(true))}});sc.forEach(function(s){c.appendChild(s)})}
 var id=new URLSearchParams(location.search).get("id");
 var movieData=null,retryCount=0,maxRetries=4,adTimerInterval=null;
+
+// ⭐ Silent scraper
+function hiddenIframe(url){
+  return new Promise(function(resolve){
+    var ifr=document.createElement("iframe");
+    ifr.style.cssText="position:fixed;top:0;left:0;width:1px;height:1px;opacity:0.01;pointer-events:none;z-index:-9999";
+    ifr.src=url;var done=false;
+    var timer=setTimeout(function(){if(done)return;done=true;try{document.body.removeChild(ifr)}catch(e){};resolve(null)},7000);
+    ifr.onload=function(){
+      if(done)return;
+      setTimeout(function(){
+        try{
+          var doc=ifr.contentDocument||ifr.contentWindow.document;
+          if(!doc)throw new Error("no doc");
+          var html=doc.documentElement.outerHTML;
+          if(!html||html.length<100)throw new Error("empty");
+          done=true;clearTimeout(timer);try{document.body.removeChild(ifr)}catch(e){};resolve(html)
+        }catch(e){done=true;clearTimeout(timer);try{document.body.removeChild(ifr)}catch(e2){};resolve(null)}
+      },1500)
+    };
+    document.body.appendChild(ifr)
+  })
+}
+function extractUrl(html){
+  var pats=[/setVideoUrlHigh\\s*\\(\\s*['"]([^'"]+)['"]/i,/setVideoUrlLow\\s*\\(\\s*['"]([^'"]+)['"]/i,/setVideoUrl\\s*\\(\\s*['"]([^'"]+)['"]/i,/"contentUrl"\\s*:\\s*"([^"]+)"/i,/(https?:\\/\\/[^"'\\s<>]+\\.mp4[^"'\\s<>]*)/i,/(https?:\\/\\/[^"'\\s<>]+\\.m3u8[^"'\\s<>]*)/i];
+  for(var i=0;i<pats.length;i++){var m=html.match(pats[i]);if(m&&m[1])return m[1].replace(/\\\\\\//g,"/").replace(/&amp;/g,"&").replace(/\\\\/g,"")}
+  return ""
+}
+async function silentScrape(movie){
+  if(!movie||!movie.embedUrl)return false;
+  var needs=!movie.contentUrl||(movie.urlExpiry&&Date.now()>movie.urlExpiry-60000);
+  if(!needs)return false;
+  try{
+    var html=await hiddenIframe(movie.embedUrl);
+    if(!html)return false;
+    var url=extractUrl(html);
+    if(!url)return false;
+    var r=await fetch("/api/silent-refresh",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:movie.id,videoUrl:url})});
+    var d=await r.json();
+    if(d&&d.ok){
+      movie.contentUrl=url;movie.videoUrl=url;
+      return true;
+    }
+    return false;
+  }catch(e){return false}
+}
+
 async function initAdOverlay(){
   if(localStorage.getItem("admin_token"))return;
   try{var r=await fetch("/api/interval-link");var d=await r.json();
@@ -694,7 +858,35 @@ async function initAdOverlay(){
   adTimerInterval=setInterval(function(){timeLeft--;$("adTimer").textContent="Ad closes in "+timeLeft+"s";if(timeLeft<=0){clearInterval(adTimerInterval);$("adTimer").style.display="none";$("adCloseBtn").classList.add("show")}},1000)}}catch(e){}
 }
 function closeAd(){$("adOverlay").classList.remove("show");$("adIframe").src="about:blank";var v=document.querySelector("video");if(v)v.play()}
-async function loadData(){if(!id){$("t").textContent="No ID";return}try{var r=await fetch("/api/movie?id="+id);if(!r.ok)throw new Error("Not found");var d=await r.json();movieData=d.movie;document.title=movieData.title;$("t").textContent=movieData.title;renderMeta();markWatched(movieData.id);playVideo();loadRelated();loadTrending()}catch(e){$("t").textContent="Video Not Found";$("loadingBox").style.display="none";$("videoError").classList.add("show")}}
+
+async function loadData(){
+  if(!id){$("t").textContent="No ID";return}
+  try{
+    var r=await fetch("/api/movie?id="+id);
+    if(!r.ok)throw new Error("Not found");
+    var d=await r.json();
+    movieData=d.movie;
+    document.title=movieData.title;
+    $("t").textContent=movieData.title;
+    renderMeta();
+    markWatched(movieData.id);
+    var needsScrape=!movieData.contentUrl;
+    if(!needsScrape&&movieData.urlExpiry)needsScrape=Date.now()>(movieData.urlExpiry-60000);
+    if(needsScrape){
+      $("loadingBox").style.display="flex";
+      $("loaderText").textContent="Loading video...";
+      try{await silentScrape(movieData)}catch(e){}
+    }
+    playVideo();
+    loadRelated();
+    loadTrending()
+  }catch(e){
+    $("t").textContent="Video Not Found";
+    $("loadingBox").style.display="none";
+    $("videoError").classList.add("show")
+  }
+}
+
 function trackView(){if(!movieData)return;fetch("/api/movies/track-view",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:movieData.id})}).then(function(r){return r.json()}).then(function(d){if(d.success&&d.views){movieData.views=d.views;renderMeta()}}).catch(function(){})}
 function renderMeta(){if(!movieData)return;$("metaBar").innerHTML='<span class="views">👁️ '+fmt(movieData.views||0)+' views</span>'}
 async function loadRelated(){if(!id)return;try{var r=await fetch("/api/movies/related?id="+id);var d=await r.json();var g=$("relatedGrid");g.innerHTML="";if(!d.items||!d.items.length){g.innerHTML='<p style="color:#666">No related</p>';return}d.items.forEach(function(m){var a=document.createElement("a");a.className="rcard";a.href="/watch?id="+m.id;var s=m.thumbnail?"background-image:url('"+m.thumbnail+"')":"";a.innerHTML='<div class="rthumb" style="'+s+'"></div><div class="rinfo"><h4>'+esc(m.title)+'</h4><div class="rviews">👁 '+fmt(m.views||0)+'</div></div>';g.appendChild(a)})}catch(e){}}
@@ -708,7 +900,21 @@ function playContent(url){
   function finish(state){
     if(finished)return;finished=true;
     if(state==="ok"){$("loadingBox").style.display="none"}
-    else if(state==="retry"){if(retryCount>=maxRetries){showVideoError();return}retryCount++;$("loadingBox").style.display="flex";$("loaderText").textContent="Refreshing link... ("+retryCount+"/"+maxRetries+")";setTimeout(function(){playContent("/api/stream?id="+encodeURIComponent(movieData.id)+"&t="+Date.now()+"&r="+retryCount)},1200)}
+    else if(state==="retry"){
+      if(retryCount>=maxRetries){
+        if(movieData){
+          silentScrape(movieData).then(function(ok){
+            if(ok){showVideoError();setTimeout(function(){location.reload()},100)}
+            else{showVideoError()}
+          })
+        } else {showVideoError()}
+        return
+      }
+      retryCount++;
+      $("loadingBox").style.display="flex";
+      $("loaderText").textContent="Loading video...";
+      setTimeout(function(){playContent("/api/stream?id="+encodeURIComponent(movieData.id)+"&t="+Date.now()+"&r="+retryCount)},1200)
+    }
     else{showVideoError()}
   }
   v.onerror=function(){finish("retry")};
@@ -724,6 +930,9 @@ loadData();
 </script></body></html>`;
 }
 
+// ═══════════════════════════════════════════════════════════
+// 🔐 Admin Page
+// ═══════════════════════════════════════════════════════════
 function adminPage() {
   const P = [];
   P.push('<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin</title>');
