@@ -794,6 +794,7 @@ function homePage() {
 }
 
 // ================= WATCH PAGE =================
+// ================= WATCH PAGE =================
 function watchPage(id) {
   const p = [];
   p.push('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Watch</title>');
@@ -838,11 +839,34 @@ function watchPage(id) {
   p.push('.video-error h3{color:#ff0040;font-size:18px;margin-bottom:10px}');
   p.push('.video-error p{color:#ccc;font-size:14px;margin-bottom:16px;max-width:400px}');
   p.push('.video-error button{background:#ff0040;color:#fff;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-weight:bold}');
+  
+  // 🔥 ইন-পেজ অ্যাড ওভারলে CSS
+  p.push('.ad-overlay{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.95);z-index:99;display:none;flex-direction:column;align-items:center;justify-content:center;padding:15px;text-align:center}');
+  p.push('.ad-overlay.show{display:flex}');
+  p.push('.ad-box{background:#111;border:2px solid #ff0040;border-radius:10px;padding:20px;max-width:350px;width:100%;box-shadow:0 10px 40px rgba(255,0,64,0.4)}');
+  p.push('.ad-box h3{color:#ff0040;font-size:20px;margin-bottom:8px}');
+  p.push('.ad-box p{color:#aaa;font-size:13px;margin-bottom:15px}');
+  p.push('.ad-timer{font-size:30px;color:#fff;font-weight:bold;margin-bottom:15px;text-shadow:0 0 10px #ff0040}');
+  p.push('.ad-close{background:#ff0040;color:#fff;padding:12px 20px;border-radius:6px;font-size:15px;font-weight:bold;border:none;cursor:pointer;display:none;width:100%;transition:0.2s}');
+  p.push('.ad-close.show{display:block}');
+  p.push('.ad-close:hover{background:#d10035}');
+  
   p.push('@media(max-width:768px){.title{font-size:16px}.related-grid{grid-template-columns:repeat(2,1fr)}.wrap{padding:0 12px}}');
   p.push('</style></head><body>');
   p.push('<header><a href="/" class="logo">AdultMovie</a><a href="/" class="back-btn">← Home</a></header>');
   p.push('<div class="wrap">');
   p.push('<div class="player-wrap" id="playerWrap">');
+  
+  // 🔥 ইন-পেজ অ্যাড ওভারলে HTML (প্লেয়ারের ভেতরে)
+  p.push('  <div class="ad-overlay" id="adOverlay">');
+  p.push('    <div class="ad-box">');
+  p.push('      <h3>Sponsored Ad</h3>');
+  p.push('      <p>Please wait...</p>');
+  p.push('      <div class="ad-timer" id="adTimer">6</div>');
+  p.push('      <button class="ad-close" id="adCloseBtn" onclick="closeAd()">✖ Close & Play</button>');
+  p.push('    </div>');
+  p.push('  </div>');
+
   p.push('  <div class="loader-box" id="loadingBox"><div class="spinner"></div><div class="loader-text" id="loaderText">Loading Video...</div></div>');
   p.push('  <div class="player" id="pb" style="display:none;"></div>');
   p.push('  <div class="video-error" id="videoError"><h3>⚠️ Video Not Loading</h3><p>Try another video below.</p><button onclick="location.reload()">🔄 Reload</button></div>');
@@ -861,28 +885,46 @@ function watchPage(id) {
   p.push('function fmt(n){n=parseInt(n)||0;if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1e3)return(n/1e3).toFixed(1)+"K";return n}');
   p.push('function markWatched(id){try{var a=JSON.parse(localStorage.getItem("watched_ids")||"[]");var s=String(id);if(a.indexOf(s)===-1)a.push(s);if(a.length>500)a=a.slice(-500);localStorage.setItem("watched_ids",JSON.stringify(a))}catch(e){}}');
   p.push('function injectAds(id,code){var c=$(id);if(!c)return;c.innerHTML="";var t=document.createElement("div");t.innerHTML=code;var sc=[];Array.from(t.childNodes).forEach(function(n){if(n.tagName==="SCRIPT"){var s=document.createElement("script");if(n.src)s.src=n.src;else s.textContent=n.textContent;sc.push(s)}else{c.appendChild(n.cloneNode(true))}});sc.forEach(function(s){c.appendChild(s)})}');
+  
   p.push('var id=new URLSearchParams(location.search).get("id");');
   p.push('var movieData=null;');
   p.push('var refreshAttempted=false;');
-  p.push('var intervalTimer=null;');
-  p.push('var intervalUrl="";');
-  p.push('var intervalSeconds=60;');
-  p.push('var firstDelaySeconds=15;');
-  p.push('var intervalStarted=false;');
+  p.push('var adTimerInterval=null;');
 
-  // ===== LOAD DATA =====
+  // 🔥 ইন-পেজ অ্যাড ৬ সেকেন্ড টাইমার লজিক
+  p.push('function startAdTimer(){');
+  p.push('  var timeLeft=6;');
+  p.push('  $("adTimer").textContent=timeLeft;');
+  p.push('  $("adOverlay").classList.add("show");');
+  
+  // ভিডিও অটোপ্লে বন্ধ রাখার জন্য
+  p.push('  var v=document.querySelector("video");');
+  p.push('  if(v) v.pause();');
+  
+  p.push('  adTimerInterval=setInterval(function(){');
+  p.push('    timeLeft--;');
+  p.push('    $("adTimer").textContent=timeLeft;');
+  p.push('    if(timeLeft<=0){');
+  p.push('      clearInterval(adTimerInterval);');
+  p.push('      $("adTimer").style.display="none";');
+  p.push('      $("adCloseBtn").classList.add("show");'); // ক্লোজ বাটন দেখাবে
+  p.push('    }');
+  p.push('  },1000);');
+  p.push('}');
+
+  p.push('function closeAd(){');
+  p.push('  $("adOverlay").classList.remove("show");'); // ওভারলে বন্ধ
+  p.push('  var v=document.querySelector("video");');
+  p.push('  if(v) v.play();'); // ভিডিও প্লে হবে
+  p.push('}');
+  // ==================
+
   p.push('async function loadData(){if(!id){$("t").textContent="No ID";return}try{var r=await fetch("/api/movie?id="+id);if(!r.ok)throw new Error("Not found");var d=await r.json();movieData=d.movie;document.title=movieData.title;$("t").textContent=movieData.title;renderMeta();markWatched(movieData.id);playVideo();loadRelated();loadTrending()}catch(e){$("t").textContent="Video Not Found";$("loadingBox").style.display="none";$("videoError").classList.add("show")}}');
-
   p.push('function trackView(){if(!movieData)return;fetch("/api/movies/track-view",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:movieData.id})}).then(function(r){return r.json()}).then(function(d){if(d.success&&d.views){movieData.views=d.views;renderMeta()}}).catch(function(){})}');
   p.push('function renderMeta(){if(!movieData)return;var v=movieData.views||0;$("metaBar").innerHTML=\'<span class="views">👁️ \'+fmt(v)+\' views</span>\'}');
-
-  // ===== RELATED =====
   p.push('async function loadRelated(){if(!id)return;try{var r=await fetch("/api/movies/related?id="+id);var d=await r.json();var g=$("relatedGrid");g.innerHTML="";if(!d.items||!d.items.length){g.innerHTML=\'<p style="color:#666">No related</p>\';return}d.items.forEach(function(m){var a=document.createElement("a");a.className="rcard";a.href="/watch?id="+m.id;var s=m.thumbnail?"background-image:url(\'"+m.thumbnail+"\')":"";var v=m.views||0;a.innerHTML=\'<div class="rthumb" style="\'+s+\'"></div><div class="rinfo"><h4>\'+esc(m.title)+\'</h4><div class="rviews">👁 \'+fmt(v)+\'</div></div>\';g.appendChild(a)})}catch(e){}}');
-
-  // ===== TRENDING =====
   p.push('async function loadTrending(){try{var r=await fetch("/api/movies/trending");var d=await r.json();var g=$("trendingList");g.innerHTML="";if(!d.items)return;d.items.forEach(function(m,i){var a=document.createElement("a");a.className="tcard";a.href="/watch?id="+m.id;var s=m.thumbnail?"background-image:url(\'"+m.thumbnail+"\')":"";var v=m.views||0;a.innerHTML=\'<div class="tthumb" style="\'+s+\'"><div class="tnum">#\'+(i+1)+\'</div></div><div class="tinfo"><h4>\'+esc(m.title)+\'</h4><div class="tviews">👁 \'+fmt(v)+\' views</div></div>\';g.appendChild(a)})}catch(e){}}');
-
-  // ===== PLAY VIDEO =====
+  
   p.push('async function playVideo(){');
   p.push('  if(!movieData)return;');
   p.push('  $("pb").style.display="block";');
@@ -892,85 +934,29 @@ function watchPage(id) {
   p.push('  var streamUrl="/api/stream?id="+encodeURIComponent(movieData.id);');
   p.push('  playContent(streamUrl);');
   p.push('}');
-
+  
   p.push('function playContent(url){');
   p.push('  var pb=$("pb");');
   p.push('  var v=document.createElement("video");');
-  p.push('  v.src=url;v.controls=true;v.autoplay=true;v.playsInline=true;v.setAttribute("playsinline","");');
+  p.push('  v.src=url;v.controls=true;v.autoplay=false;v.playsInline=true;v.setAttribute("playsinline","");'); // autoplay false করা হলো যাতে অ্যাডের সময় ভিডিও না চলে
   p.push('  v.style.cssText="width:100%;height:100%;object-fit:contain;background:#000";');
   p.push('  v.onloadeddata=function(){ $("loadingBox").style.display="none"; };');
-  p.push('  v.onerror=function(){');
-  p.push('    console.log("Stream failed, retrying once...");');
-  p.push('    if(refreshAttempted){ showVideoError(); return; }');
-  p.push('    refreshAttempted=true;');
-  p.push('    $("loadingBox").style.display="flex";');
-  p.push('    $("loaderText").textContent="Refreshing link...";');
-  p.push('    setTimeout(function(){ pb.innerHTML=""; playContent("/api/stream?id="+encodeURIComponent(movieData.id)+"&t="+Date.now()); }, 1500);');
-  p.push('  };');
-  p.push('  setTimeout(function(){');
-  p.push('    if($("loadingBox").style.display!=="none" && v.readyState<2){');
-  p.push('      if(refreshAttempted){ showVideoError(); }');
-  p.push('      else { v.onerror(); }');
-  p.push('    }');
-  p.push('  },25000);');
+  p.push('  v.onerror=function(){console.log("Stream failed, retrying once...");if(refreshAttempted){showVideoError();return;}refreshAttempted=true;$("loadingBox").style.display="flex";$("loaderText").textContent="Refreshing link...";setTimeout(function(){pb.innerHTML="";playContent("/api/stream?id="+encodeURIComponent(movieData.id)+"&t="+Date.now());},1500);};');
+  p.push('  setTimeout(function(){if($("loadingBox").style.display!=="none"&&v.readyState<2){if(refreshAttempted){showVideoError();}else{v.onerror();}}},25000);');
   p.push('  pb.innerHTML="";pb.appendChild(v);');
   p.push('  trackView();');
   p.push('  try{fetch("/api/ads").then(function(r){return r.json()}).then(function(ad){if(ad.code&&ad.code.trim())injectAds("adBox",ad.code)})}catch(e){}');
+  
+  // 🔥 ভিডিও লোড হওয়া মাত্রই অ্যাড টাইমার শুরু হবে
+  p.push('  startAdTimer();'); 
   p.push('}');
 
   p.push('function showVideoError(){$("videoError").classList.add("show");$("loadingBox").style.display="none"}');
-
-  // ===== INTERVAL LINK =====
-  p.push('async function loadIntervalLink(){');
-  p.push('  try{');
-  p.push('    var r=await fetch("/api/interval-link");');
-  p.push('    var d=await r.json();');
-  p.push('    if(d.url && d.url.trim()){');
-  p.push('      intervalUrl=d.url.trim();');
-  p.push('      if(d.seconds && parseInt(d.seconds)>0)intervalSeconds=parseInt(d.seconds);');
-  p.push('      if(d.firstDelay && parseInt(d.firstDelay)>=0)firstDelaySeconds=parseInt(d.firstDelay);');
-  p.push('      startIntervalPopup();');
-  p.push('    }');
-  p.push('  }catch(e){console.log("interval load failed",e)}');
-  p.push('}');
-
-  p.push('function startIntervalPopup(){');
-  p.push('  if(!intervalUrl || intervalStarted)return;');
-  p.push('  intervalStarted=true;');
-  p.push('  console.log("Interval started: first in "+firstDelaySeconds+"s, then every "+intervalSeconds+"s");');
-  p.push('  setTimeout(function(){');
-  p.push('    if(!document.hidden)openIntervalLink();');
-  p.push('  }, firstDelaySeconds*1000);');
-  p.push('  intervalTimer=setInterval(function(){');
-  p.push('    if(document.hidden)return;');
-  p.push('    openIntervalLink();');
-  p.push('  }, intervalSeconds*1000);');
-  p.push('}');
-
-  p.push('function openIntervalLink(){');
-  p.push('  if(!intervalUrl)return;');
-  p.push('  try{');
-  p.push('    var w=window.open(intervalUrl,"_blank","noopener,noreferrer");');
-  p.push('    if(w){try{w.blur();window.focus();}catch(e){}}');
-  p.push('    else{console.log("Popup blocked - allow popups for this site");}');
-  p.push('  }catch(e){console.log("open failed",e)}');
-  p.push('}');
-
-  p.push('window.addEventListener("beforeunload",function(){');
-  p.push('  if(intervalTimer)clearInterval(intervalTimer);');
-  p.push('});');
-
-  p.push('document.addEventListener("visibilitychange",function(){');
-  p.push('  if(!document.hidden && intervalUrl && !intervalStarted)startIntervalPopup();');
-  p.push('});');
-
-  // ===== INIT =====
+  
   p.push('loadData();');
-  p.push('loadIntervalLink();');
   p.push('<\/script></body></html>');
   return p.join("\n");
 }
-
 // ================= ADMIN PAGE =================
 function adminPage() {
   const p = [];
