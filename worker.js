@@ -840,7 +840,7 @@ function watchPage(id) {
   p.push('.video-error p{color:#ccc;font-size:14px;margin-bottom:16px;max-width:400px}');
   p.push('.video-error button{background:#ff0040;color:#fff;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-weight:bold}');
   
-  // 🔥 ইন-পেজ অ্যাড ওভারলে CSS
+  // 🔥 ওভারলে স্টাইল
   p.push('.ad-overlay{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.95);z-index:99;display:none;flex-direction:column;align-items:center;justify-content:center;text-align:center}');
   p.push('.ad-overlay.show{display:flex}');
   p.push('.ad-iframe-box{width:100%;height:100%;border:none;background:#fff}');
@@ -856,7 +856,7 @@ function watchPage(id) {
   p.push('<div class="wrap">');
   p.push('<div class="player-wrap" id="playerWrap">');
   
-  // 🔥 ইন-পেজ অ্যাড ওভারলে HTML (প্লেয়ারের ভেতরে Iframe)
+  // 🔥 ইন-পেজ অ্যাড ওভারলে HTML
   p.push('  <div class="ad-overlay" id="adOverlay">');
   p.push('    <iframe id="adIframe" class="ad-iframe-box" src="about:blank" scrolling="no" allow="autoplay; fullscreen"></iframe>');
   p.push('    <div class="ad-controls">');
@@ -889,13 +889,21 @@ function watchPage(id) {
   p.push('var refreshAttempted=false;');
   p.push('var adTimerInterval=null;');
 
-  // 🔥 অ্যাড লোড এবং ৬ সেকেন্ড টাইমার লজিক
+  // 🔥 ৬ সেকেন্ডের অ্যাড লজিক
   p.push('async function initAdOverlay(){');
+  // 🔥🔥🔥 এখানেই সেই ম্যাজিক! চেক করছে ইউজার অ্যাডমিন কিনা।
+  p.push('  var isAdmin = localStorage.getItem("admin_token");');
+  p.push('  if(isAdmin){');
+  p.push('     console.log("Admin logged in. Skipping ad.");');
+  p.push('     return; // অ্যাডমিন হলে অ্যাড দেখাবে না, সরাসরি রিটার্ন করবে');
+  p.push('  }');
+  // 🔥🔥🔥
+
   p.push('  try{');
-  p.push('    var r=await fetch("/api/interval-link");');
+  p.push('    var r=await fetch("/api/interval-link");'); 
   p.push('    var d=await r.json();');
   p.push('    if(d.url && d.url.trim()){');
-  p.push('      $("adIframe").src=d.url.trim();'); // অ্যাডমিন প্যানেলের লিংকটা Iframe এ লোড হবে
+  p.push('      $("adIframe").src=d.url.trim();'); 
   p.push('      $("adOverlay").classList.add("show");');
   
   // ভিডিও পজ রাখা
@@ -911,7 +919,7 @@ function watchPage(id) {
   p.push('        if(timeLeft<=0){');
   p.push('          clearInterval(adTimerInterval);');
   p.push('          $("adTimer").style.display="none";');
-  p.push('          $("adCloseBtn").classList.add("show");'); // ক্লোজ বাটন দেখাবে
+  p.push('          $("adCloseBtn").classList.add("show");'); 
   p.push('        }');
   p.push('      },1000);');
   p.push('    }');
@@ -919,10 +927,10 @@ function watchPage(id) {
   p.push('}');
 
   p.push('function closeAd(){');
-  p.push('  $("adOverlay").classList.remove("show");'); // ওভারলে বন্ধ
-  p.push('  $("adIframe").src="about:blank";'); // Iframe ক্লিয়ার করা (মেমোরি বাঁচাতে)
+  p.push('  $("adOverlay").classList.remove("show");'); 
+  p.push('  $("adIframe").src="about:blank";'); 
   p.push('  var v=document.querySelector("video");');
-  p.push('  if(v) v.play();'); // ভিডিও প্লে হবে
+  p.push('  if(v) v.play();'); // ক্লোজ করলেই ভিডিও প্লে হবে
   p.push('}');
   // ==================
 
@@ -952,9 +960,10 @@ function watchPage(id) {
   p.push('  setTimeout(function(){if($("loadingBox").style.display!=="none"&&v.readyState<2){if(refreshAttempted){showVideoError();}else{v.onerror();}}},25000);');
   p.push('  pb.innerHTML="";pb.appendChild(v);');
   p.push('  trackView();');
+  
   p.push('  try{fetch("/api/ads").then(function(r){return r.json()}).then(function(ad){if(ad.code&&ad.code.trim())injectAds("adBox",ad.code)})}catch(e){}');
   
-  // 🔥 ভিডিও স্ক্রিনে আসার সাথে সাথেই অ্যাড ওভারলে শুরু হবে
+  // 🔥 অ্যাড ইনিশিয়ালাইজ (ভেতরে চেক আছে, অ্যাডমিন হলে শো করবে না)
   p.push('  initAdOverlay();'); 
   p.push('}');
 
