@@ -582,6 +582,57 @@ async function addMovie(request, env) {
   const embedUrl = b.embedUrl || extractSrc(b.videoUrl || "");
   const contentUrl = b.contentUrl || "";
   const vurl = contentUrl || embedUrl;
+
+  // 🔥 ============================================
+  // 🔥 DUPLICATE CHECK — একই ভিডিও ২ বার add হবে না
+  // 🔥 ============================================
+  
+  // Normalize helper — URL থেকে tracking param, trailing slash সরায়
+  const normalizeUrl = (u) => {
+    if (!u) return "";
+    let s = String(u).trim().toLowerCase();
+    // embedframe URL থেকে videoId বের করুন
+    const em = s.match(/embedframe\/([a-z0-9\-]+)/i);
+    if (em) return "embedframe:" + em[1].toLowerCase();
+    // contentUrl থেকে query param বাদ দিন
+    try {
+      const parsed = new URL(s);
+      return parsed.origin.toLowerCase() + parsed.pathname.replace(/\/+$/, "").toLowerCase();
+    } catch (e) {
+      return s.replace(/[?#].*$/, "").replace(/\/+$/, "").toLowerCase();
+    }
+  };
+
+  // ১) Embed URL দিয়ে check (সবচেয়ে নির্ভরযোগ্য)
+  const newEmbedKey = normalizeUrl(embedUrl);
+  
+  // ২) videoId দিয়ে check
+  const newVideoId = (b.videoId || "").trim();
+
+  // ৩) Content URL দিয়ে check
+  const newContentKey = normalizeUrl(contentUrl);
+
+  for (const existing of list) {
+    // videoId match
+    if (newVideoId && existing.id === newVideoId) {
+      return json({ error: "এই ভিডিও আগেই আছে! (Video ID মিলেছে)" }, 400);
+    }
+    
+    // Embed URL match
+    if (newEmbedKey && normalizeUrl(existing.embedUrl) === newEmbedKey) {
+      return json({ error: "এই ভিডিও আগেই আছে! (Embed URL মিলেছে)" }, 400);
+    }
+    
+    // Content URL match (যদি থাকে)
+    if (newContentKey && existing.contentUrl && normalizeUrl(existing.contentUrl) === newContentKey) {
+      return json({ error: "এই ভিডিও আগেই আছে! (Content URL মিলেছে)" }, 400);
+    }
+  }
+
+  // 🔥 ============================================
+  // 🔥 ADD NEW MOVIE
+  // 🔥 ============================================
+  
   let thumb = (b.thumbnail || "").trim();
   if (!thumb) thumb = autoThumb(embedUrl || vurl);
   const movie = {
@@ -596,7 +647,6 @@ async function addMovie(request, env) {
     urlExpiry: getUrlExpiry(contentUrl),
     views: b.views || (Math.floor(Math.random() * 4500) + 500)
   };
-  if (b.videoId && list.find(m => m.id === b.videoId)) return json({ error: "এই ভিডিও আগেই আছে!" }, 400);
   list.push(movie);
   await env.MOVIES.put("movie_list", JSON.stringify(list));
   return json({ success: true, movie });
