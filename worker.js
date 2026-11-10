@@ -572,7 +572,8 @@ function watchPage(id) {
   return p.join("\n");
 }
 
-// ================= ADMIN PAGE =================
+// ================= ADMIN PAGE ===========
+// ================= ADMIN PAGE (আপডেটেড) =================
 function adminPage() {
   const p = [];
   p.push('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin</title>');
@@ -609,6 +610,7 @@ function adminPage() {
   p.push('.tabs button{padding:10px 20px;background:#1c1c1c;color:#eee;border:1px solid #333;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600}');
   p.push('.tabs button.active{background:#ff0040;border-color:#ff0040}');
   p.push('.auto-box{background:#2a2a2a;border:1px dashed #ff9800;padding:15px;border-radius:8px;margin-bottom:20px}');
+  p.push('.paste-box{background:#1a2a3a;border:1px dashed #00c853;padding:15px;border-radius:8px;margin-bottom:20px}');
   p.push('</style></head><body>');
   p.push('<header><h1>Admin Panel</h1><a href="/">Home</a></header>');
   p.push('<div class="wrap">');
@@ -617,7 +619,12 @@ function adminPage() {
   p.push('<div class="tabs"><button id="t1" class="active" data-tab="m">Movies</button><button id="t2" data-tab="ad">Ad Code</button><button id="t3" data-tab="il">Interval Link</button></div>');
 
   p.push('<div id="tm">');
-  p.push('<div class="card auto-box"><h2 style="color:#fff;margin-bottom:10px">⚡ Auto Extract</h2><p class="hint" style="margin-bottom:10px">URL দিন → contentUrl, title, thumbnail, views, embedUrl auto fill হবে।</p><input type="text" id="scrapeUrl" placeholder="https://expmle.com/video-page"><button class="primary" style="background:#ff9800;margin-top:10px" id="scrapeBtn">Extract & Fill</button><div id="sm" class="msg" style="margin-top:10px"></div></div>');
+
+  // 🆕 VIEW SOURCE PASTE BOX
+  p.push('<div class="card paste-box"><h2 style="color:#00c853;margin-bottom:10px">📋 Paste View Source (Ctrl+U)</h2><p class="hint" style="margin-bottom:10px;color:#aaddff">1) যে ভিডিও পেজ থেকে ডাটা নিতে চান সেটা খুলুন → Ctrl+U (View Source) চাপুন → সব কোড কপি করুন → নিচে পেস্ট করুন → Extract চাপুন। Title, Embed URL, Content URL, Thumbnail সব অটো ভরে যাবে।</p><textarea id="viewSource" placeholder="এখানে পুরো View Source কোড পেস্ট করুন..." style="min-height:150px"></textarea><button class="primary" style="background:#00c853;margin-top:10px" id="parseSourceBtn">🔍 Extract & Fill</button><div id="psm" class="msg" style="margin-top:10px"></div></div>');
+
+  // Auto extract from URL (optional)
+  p.push('<div class="card auto-box"><h2 style="color:#fff;margin-bottom:10px">⚡ Auto Extract from URL</h2><p class="hint" style="margin-bottom:10px">URL দিলে সার্ভার নিজে source আনবে। তবে সাইট ব্লক করলে উপরের Paste View Source ব্যবহার করুন।</p><input type="text" id="scrapeUrl" placeholder="https://expmle.com/video-page"><button class="primary" style="background:#ff9800;margin-top:10px" id="scrapeBtn">Auto Extract</button><div id="sm" class="msg" style="margin-top:10px"></div></div>');
 
   p.push('<div class="card"><h2 id="ft">Add / Edit Movie</h2><input type="hidden" id="eid"><input type="hidden" id="videoIdField">');
   p.push('<label>Title</label><input type="text" id="title">');
@@ -647,6 +654,7 @@ function adminPage() {
   p.push(' $("adsSaveBtn").onclick=saveAds;');
   p.push(' $("intervalLinkSaveBtn").onclick=saveIntervalLink;');
   p.push(' $("scrapeBtn").onclick=autoFetch;');
+  p.push(' $("parseSourceBtn").onclick=parseViewSource;');
   p.push(' document.querySelectorAll("[data-tab]").forEach(function(b){b.onclick=function(){tab(b.getAttribute("data-tab"))}});');
   p.push(' if(token)verify().then(function(ok){if(ok)show()});');
   p.push('});');
@@ -656,12 +664,47 @@ function adminPage() {
   p.push('function tab(n){$("tm").classList.add("hidden");$("tad").classList.add("hidden");$("til").classList.add("hidden");$("t1").classList.remove("active");$("t2").classList.remove("active");$("t3").classList.remove("active");if(n==="m"){$("tm").classList.remove("hidden");$("t1").classList.add("active")}if(n==="ad"){$("tad").classList.remove("hidden");$("t2").classList.add("active")}if(n==="il"){$("til").classList.remove("hidden");$("t3").classList.add("active")}}');
   p.push('function logout(){localStorage.removeItem("admin_token");location.reload()}');
   p.push('function reset(){$("eid").value="";$("title").value="";$("vurl").value="";$("thumb").value="";$("videoIdField").value="";$("embedUrl").value="";$("contentUrl").value="";$("ft").textContent="Add / Edit Movie";$("sb").textContent="Add Movie";$("cb").classList.add("hidden")}');
+
+  // 🔥 NEW: parse View Source — finds Title, Embed, ContentUrl, Thumbnail
+  p.push('function parseViewSource(){');
+  p.push('  var text=$("viewSource").value;');
+  p.push('  var m=$("psm");');
+  p.push('  if(!text||!text.trim()){m.textContent="আগে View Source কোড পেস্ট করুন";m.className="msg err show";return}');
+  p.push('  var found=[];');
+  // Title: "name":"..."
+  p.push('  var title="";var tm=text.match(/"name"\\s*:\\s*"([^"]+)"/i);if(!tm)tm=text.match(/video_title\\s*[:=]\\s*[\'\"]([^\'\"]+)[\'\"]/i);if(tm){title=tm[1];found.push("Title")}');
+  // Embed URL: <iframe ... src="https://expmle.com/embedframe/xxx"...
+  p.push('  var embedUrl="";var em=text.match(/<iframe[^>]*\\ssrc\\s*=\\s*["\']([^"\']*embedframe[^"\']*)["\']/i);if(!em)em=text.match(/<iframe[^>]*\\ssrc\\s*=\\s*["\']([^"\']+)["\']/i);if(em){embedUrl=em[1];found.push("Embed URL")}');
+  // Content URL: "contentUrl":"..."
+  p.push('  var contentUrl="";var cm=text.match(/"contentUrl"\\s*:\\s*"([^"]+)"/i);if(cm){contentUrl=cm[1];found.push("Content URL")}');
+  // Thumbnail: "thumbnailUrl":["..."] or "thumbnailUrl":"..."
+  p.push('  var thumb="";var thm=text.match(/"thumbnailUrl"\\s*:\\s*\\[\\s*"([^"]+)"/i);if(!thm)thm=text.match(/"thumbnailUrl"\\s*:\\s*"([^"]+)"/i);if(!thm)thm=text.match(/"preview_url\\d?"\\s*:\\s*"([^"]+)"/i);if(thm){thumb=thm[1];found.push("Thumbnail")}');
+  // Also find id from embedframe
+  p.push('  var vid="";if(embedUrl){var vm=embedUrl.match(/embedframe\\/([a-zA-Z0-9]+)/);if(vm)vid=vm[1]}');
+  // Fill fields
+  p.push('  if(title)$("title").value=title;');
+  p.push('  if(embedUrl)$("embedUrl").value=embedUrl;');
+  p.push('  if(contentUrl)$("contentUrl").value=contentUrl;');
+  p.push('  if(thumb)$("thumb").value=thumb;');
+  p.push('  if(contentUrl)$("vurl").value=contentUrl;else if(embedUrl)$("vurl").value=embedUrl;');
+  p.push('  if(vid)$("videoIdField").value=vid;');
+  p.push('  if(found.length){');
+  p.push('    m.innerHTML="✅ পাওয়া গেছে: <b>"+found.join(", ")+"</b>";');
+  p.push('    m.className="msg ok show";');
+  p.push('    m.style.color="#b6ffb6";');
+  p.push('    window.scrollTo({top:document.querySelector("#ft").offsetTop-50,behavior:"smooth"});');
+  p.push('  }else{');
+  p.push('    m.textContent="❌ কিছু পাওয়া যায়নি। সঠিক View Source কোড পেস্ট করেছেন কিনা দেখুন।";');
+  p.push('    m.className="msg err show";');
+  p.push('    m.style.color="#ffb6b6";');
+  p.push('  }');
+  p.push('}');
+
+  // auto fetch from URL (server side)
   p.push('async function autoFetch(){var url=$("scrapeUrl").value.trim();var m=$("sm");if(!url){m.textContent="URL দিন";m.className="msg err show";return}m.textContent="Extract করছি...";m.className="msg show";m.style.color="#fff";try{var r=await fetch("/api/fetch-source",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:url})});var d=await r.json();if(r.ok&&d.success){fillForm(d.data);m.textContent="Data পাওয়া গেছে!";m.className="msg ok show";m.style.color="#b6ffb6"}else{m.textContent=d.error||"Failed";m.className="msg err show";m.style.color="#ffb6b6"}}catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}}');
   p.push('function fillForm(data){$("title").value=data.title||"";$("embedUrl").value=data.embedUrl||"";$("contentUrl").value=data.contentUrl||"";$("thumb").value=data.thumbnail||"";$("vurl").value=data.videoUrl||"";$("videoIdField").value=data.id||""}');
   p.push('async function saveMovie(){var eid=$("eid").value;var title=$("title").value.trim();var embedUrl=$("embedUrl").value.trim();var contentUrl=$("contentUrl").value.trim();var thumb=$("thumb").value.trim();var vurl=$("vurl").value.trim();var vid=$("videoIdField").value.trim();var m=$("am");if(!title||(!vurl&&!contentUrl&&!embedUrl)){m.textContent="Title ও অন্তত একটা URL দরকার";m.className="msg err show";return}var u=eid?"/api/movies/update":"/api/movies";var body={title:title,embedUrl:embedUrl,contentUrl:contentUrl,thumbnail:thumb,videoUrl:vurl};if(eid)body.id=eid;if(!eid&&vid)body.videoId=vid;try{var r=await fetch(u,{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify(body)});var d=await r.json();if(r.ok){m.textContent=eid?"Updated":"Added";m.className="msg ok show";reset();loadList();setTimeout(function(){m.classList.remove("show")},2500)}else{m.textContent=d.error||"Failed";m.className="msg err show"}}catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}}');
-  // 🔄 refresh single
   p.push('async function refreshOne(id,btn){btn.disabled=true;var old=btn.textContent;btn.textContent="⏳";try{var r=await fetch("/api/refresh-movie",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({id:id})});var d=await r.json();if(r.ok){btn.textContent="✓"}else{btn.textContent="✗";alert(d.error||"Failed")}}catch(e){btn.textContent="✗";alert(e.message)}setTimeout(function(){btn.textContent=old;btn.disabled=false},1500)}');
-  // 🔄 refresh all
   p.push('async function refreshAllBtn(){if(!confirm("সব ভিডিওর contentUrl refresh করবে?"))return;var b=$("refreshAllTop");if(b){b.disabled=true;b.textContent="⏳ Refreshing..."}try{var r=await fetch("/api/refresh-all",{method:"POST",headers:{"X-Admin-Password":token}});var d=await r.json();if(r.ok){var msg="OK: "+d.ok+"  Fail: "+d.fail;if(d.failures&&d.failures.length){msg+="\\n\\nপ্রথম ১০টা ব্যর্থ:\\n"+d.failures.slice(0,10).map(function(f){return "• "+f.title+": "+f.reason}).join("\\n")}alert(msg)}else{alert(d.error||"Failed")}}catch(e){alert(e.message)}if(b){b.disabled=false;b.textContent="🔄 Refresh All"}loadList()}');
   p.push('async function loadList(){var p=1,all=[];while(true){var r=await fetch("/api/movies?page="+p+"&noshuffle=1");var d=await r.json();all=all.concat(d.items);if(p>=d.totalPages)break;p++}var el=$("list");if(!all.length){el.innerHTML=\'<p style="color:#666">No movies</p>\';return}el.innerHTML="";var hdr=document.createElement("div");hdr.style.cssText="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px";hdr.innerHTML=\'<div style="font-size:14px;color:#888">Total: \'+all.length+\'</div>\';var refAll=document.createElement("button");refAll.id="refreshAllTop";refAll.className="primary small";refAll.style.background="#ff9800";refAll.style.marginTop="0";refAll.textContent="🔄 Refresh All";refAll.onclick=refreshAllBtn;hdr.appendChild(refAll);el.appendChild(hdr);all.forEach(function(m){var s=m.thumbnail?"background-image:url(\'"+m.thumbnail+"\')":"";var d=document.createElement("div");d.className="item";var hasC=m.contentUrl?"✅":"⚠️";var d2=document.createElement("div");d2.className="info";d2.innerHTML=\'<div class="mini" style="\'+s+\'"></div><div><h4>\'+esc(m.title)+\' \'+hasC+\'</h4><div class="stats">👁 \'+fmt(m.views||0)+\' • embed: \'+(m.embedUrl?"✓":"✗")+\'</div></div>\';var acts=document.createElement("div");acts.className="acts";var rb=document.createElement("button");rb.className="primary small";rb.style.background="#ff9800";rb.style.marginTop="0";rb.textContent="🔄 Refresh";rb.onclick=function(){refreshOne(m.id,rb)};var eb=document.createElement("button");eb.className="primary small";eb.style.marginTop="0";eb.textContent="Edit";eb.onclick=function(){editMovie(m.id)};var db=document.createElement("button");db.className="primary small danger";db.style.marginTop="0";db.textContent="Delete";db.onclick=function(){delMovie(m.id)};acts.appendChild(rb);acts.appendChild(eb);acts.appendChild(db);d.appendChild(d2);d.appendChild(acts);el.appendChild(d)})}');
   p.push('async function editMovie(id){var p=1,all=[];while(true){var r=await fetch("/api/movies?page="+p+"&noshuffle=1");var d=await r.json();all=all.concat(d.items);if(p>=d.totalPages)break;p++}var m=all.find(function(x){return x.id===id});if(!m)return;$("eid").value=m.id;$("title").value=m.title;$("embedUrl").value=m.embedUrl||"";$("contentUrl").value=m.contentUrl||"";$("thumb").value=m.thumbnail||"";$("vurl").value=m.videoUrl||"";$("videoIdField").value="";$("ft").textContent="Edit Movie";$("sb").textContent="Update";$("cb").classList.remove("hidden");window.scrollTo({top:0,behavior:"smooth"})}');
