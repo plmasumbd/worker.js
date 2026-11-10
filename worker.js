@@ -47,33 +47,83 @@ function getUrlExpiry(url) {
   const s = String(url);
   let m;
 
-  // secure=xxx==,1234567890  (double = padding + comma) ⭐ আপনার FORMAT
-  m = s.match(/[?&]secure=[^,&]+=+,\s*(\d{10,13})/i);
-  if (m) { const t = parseInt(m[1], 10); return t < 1e12 ? t * 1000 : t; }
+  // Signed URL format: secure=TOKEN==,UNIX_TIMESTAMP
+  m = s.match(/[?&]secure=[^&,]+={0,2},\s*(\d{10,13})/i);
+  if (!m) m = s.match(/[?&]secure=[^&,]+%2C(\d{10,13})/i);
+  if (!m) m = s.match(/[?&](?:expires|e|exp|valid|timestamp|ts|expire)=(\d{10,13})/i);
 
-  // secure=xxx,1234567890
-  m = s.match(/[?&]secure=[^,&]+,\s*(\d{10,13})/i);
-  if (m) { const t = parseInt(m[1], 10); return t < 1e12 ? t * 1000 : t; }
+  if (m && /^\d{10,13}$/.test(m[1])) {
+    const t = parseInt(m[1], 10);
+    return t < 1e12 ? t * 1000 : t;
+  }
 
-  // secure=xxx%2C1234567890
-  m = s.match(/[?&]secure=[^,&]+%2C(\d{10,13})/i);
-  if (m) { const t = parseInt(m[1], 10); return t < 1e12 ? t * 1000 : t; }
-
-  // expires / e / exp / ts / valid
-  m = s.match(/[?&](?:expires|e|exp|valid|timestamp|ts|expire)=(\d{10,13})/i);
-  if (m) { const t = parseInt(m[1], 10); return t < 1e12 ? t * 1000 : t; }
-
-  // path এ timestamp
-  m = s.match(/\/(\d{10,13})\//);
-  if (m) { const t = parseInt(m[1], 10); return t < 1e12 ? t * 1000 : t; }
-
+  // Timestamp in path (only use plausible Unix timestamps).
+  m = s.match(/\/(\d{10,13})(?:\/|$)/);
+  if (m) {
+    const t = parseInt(m[1], 10);
+    const ms = t < 1e12 ? t * 1000 : t;
+    if (ms > Date.now() - 86400000 && ms < Date.now() + 366 * 86400000) return ms;
+  }
   return 0;
 }
 
 function isUrlExpired(url) {
   const exp = getUrlExpiry(url);
-  if (exp === 0) return false;
-  return Date.now() > (exp - URL_SAFETY_MARGIN);
+  return exp > 0 && Date.now() >= (exp - URL_SAFETY_MARGIN);
+}
+
+function normalizeVideoUrl(candidate, embedUrl) {
+  if (!candidate) return "";
+  const clean = String(candidate)
+    .replace(/\\\//g, "/")
+    .replace(/\\u0026/gi, "&")
+    .replace(/&amp;/gi, "&")
+    .trim();
+  try {
+    const resolved = new URL(clean, embedUrl).href;
+    const parsed = new URL(resolved);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return "";
+    if (!/\.(?:mp4|m3u8|webm|mkv)(?:$|[?#])/i.test(parsed.pathname + parsed.search)) return "";
+    return resolved;
+  } catch (e) {
+    return "";
+  }
+}
+
+// Check that a newly extracted URL is reachable before saving it.
+// A one-byte Range request avoids downloading the whole video.
+async function probeVideoUrl(videoUrl, embedUrl) {
+  if (!videoUrl || isUrlExpired(videoUrl)) return false;
+  let referer = "";
+  let origin = "";
+  try {
+    const e = new URL(embedUrl);
+    referer = e.href;
+    origin = e.origin;
+  } catch (e) {}
+
+  let response;
+  try {
+    response = await fetch(videoUrl, {
+      method: "GET",
+      headers: {
+        "Range": "bytes=0-0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
+        "Accept": "*/*",
+        ...(referer ? { "Referer": referer } : {}),
+        ...(origin ? { "Origin": origin } : {})
+      },
+      redirect: "follow"
+    });
+    const statusOk = response.status === 200 || response.status === 206;
+    const type = (response.headers.get("Content-Type") || "").toLowerCase();
+    const notHtml = !type.includes("text/html") && !type.includes("application/json");
+    try { await response.body?.cancel(); } catch (e) {}
+    return statusOk && notHtml && !isUrlExpired(videoUrl);
+  } catch (e) {
+    try { await response?.body?.cancel(); } catch (err) {}
+    return false;
+  }
 }
 
 // ================= STREAM PROXY =================
@@ -88,37 +138,20 @@ async function streamVideo(request, env, url) {
 
   const movie = list[idx];
   let videoUrl = movie.contentUrl || "";
-  let needRefresh = !videoUrl || isUrlExpired(videoUrl);
+  const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
+  const needRefresh = !videoUrl || isUrlExpired(videoUrl);
 
-  if (needRefresh) {
-    const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
-    if (embedUrl) {
-      try {
-        const fresh = await fetchFreshFromEmbed(embedUrl);
-        if (fresh.contentUrl) {
-          videoUrl = fresh.contentUrl;
-          list[idx].contentUrl = fresh.contentUrl;
-          list[idx].videoUrl = fresh.contentUrl;
-          list[idx].lastRefresh = Date.now();
-          list[idx].urlExpiry = getUrlExpiry(fresh.contentUrl);
-          await env.MOVIES.put("movie_list", JSON.stringify(list));
-        }
-      } catch (e) {}
-    }
-    if (!videoUrl) return new Response("No video available", { status: 404 });
-  }
-
-  const range = request.headers.get("Range");
   const makeHeaders = () => {
     const h = {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
       "Accept": "*/*",
       "Accept-Language": "en-US,en;q=0.9",
-      "Referer": movie.embedUrl || "https://expmle.com/",
-      "Origin": (() => {
-        try { return new URL(movie.embedUrl || videoUrl).origin; } catch (e) { return "https://expmle.com"; }
-      })(),
+      ...(embedUrl ? { "Referer": embedUrl } : {})
     };
+    try {
+      if (embedUrl) h["Origin"] = new URL(embedUrl).origin;
+    } catch (e) {}
+    const range = request.headers.get("Range");
     if (range) h["Range"] = range;
     return h;
   };
@@ -128,21 +161,42 @@ async function streamVideo(request, env, url) {
     catch (e) { return null; }
   };
 
-  let upstream = await tryFetch(videoUrl);
+  const saveFresh = async (freshUrl) => {
+    if (!freshUrl || isUrlExpired(freshUrl)) return false;
+    list[idx].contentUrl = freshUrl;
+    list[idx].videoUrl = freshUrl;
+    list[idx].lastRefresh = Date.now();
+    list[idx].urlExpiry = getUrlExpiry(freshUrl);
+    await env.MOVIES.put("movie_list", JSON.stringify(list));
+    return true;
+  };
 
-  if (!upstream || (!upstream.ok && upstream.status !== 206)) {
-    const embedUrl = movie.embedUrl || deriveEmbedUrl(movie);
+  if (needRefresh) {
     if (embedUrl) {
       try {
         const fresh = await fetchFreshFromEmbed(embedUrl);
-        if (fresh.contentUrl && fresh.contentUrl !== videoUrl) {
-          list[idx].contentUrl = fresh.contentUrl;
-          list[idx].videoUrl = fresh.contentUrl;
-          list[idx].lastRefresh = Date.now();
-          list[idx].urlExpiry = getUrlExpiry(fresh.contentUrl);
-          await env.MOVIES.put("movie_list", JSON.stringify(list));
-          videoUrl = fresh.contentUrl;
-          upstream = await tryFetch(videoUrl);
+        if (fresh.contentUrl && await saveFresh(fresh.contentUrl)) videoUrl = fresh.contentUrl;
+      } catch (e) {}
+    }
+    if (!videoUrl || isUrlExpired(videoUrl)) return new Response("No valid video URL available", { status: 502 });
+  }
+
+  let upstream = await tryFetch(videoUrl);
+
+  // If the saved signed URL has expired/revoked, extract and test a fresh one.
+  if (!upstream || (!upstream.ok && upstream.status !== 206)) {
+    if (embedUrl) {
+      try {
+        const fresh = await fetchFreshFromEmbed(embedUrl);
+        if (fresh.contentUrl && fresh.contentUrl !== videoUrl && !isUrlExpired(fresh.contentUrl)) {
+          const freshResponse = await tryFetch(fresh.contentUrl);
+          if (freshResponse && (freshResponse.ok || freshResponse.status === 206)) {
+            upstream = freshResponse;
+            videoUrl = fresh.contentUrl;
+            await saveFresh(fresh.contentUrl);
+          } else {
+            try { await freshResponse?.body?.cancel(); } catch (e) {}
+          }
         }
       } catch (e) {}
     }
@@ -162,7 +216,7 @@ function buildStreamResponse(upstream, videoUrl) {
   const cr = upstream.headers.get("Content-Range");
   if (cr) newHeaders.set("Content-Range", cr);
   newHeaders.set("Accept-Ranges", "bytes");
-  newHeaders.set("Cache-Control", "public, max-age=1800");
+  newHeaders.set("Cache-Control", "no-store, no-cache, must-revalidate");
   newHeaders.set("Access-Control-Allow-Origin", "*");
   newHeaders.set("Access-Control-Allow-Headers", "Range, Content-Type");
   newHeaders.set("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges");
@@ -211,7 +265,7 @@ async function autoContent(request, env) {
     }
 
     const freshData = await fetchFreshFromEmbed(embedUrl);
-    if (freshData.contentUrl) {
+    if (freshData.contentUrl && !isUrlExpired(freshData.contentUrl)) {
       list[idx].contentUrl = freshData.contentUrl;
       list[idx].videoUrl = freshData.contentUrl;
       list[idx].lastRefresh = now;
@@ -273,7 +327,7 @@ async function debugEmbed(url) {
     const r = await fetch(embedUrl, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-        "Referer": "https://expmle.com/",
+        "Referer": embedUrl,
         "Accept": "text/html,application/xhtml+xml,*/*;q=0.8"
       }, redirect: "follow"
     });
@@ -298,7 +352,7 @@ async function refreshMovie(request, env) {
   if (!embedUrl) return json({ error: "embedUrl নেই" }, 400);
   try {
     const fresh = await fetchFreshFromEmbed(embedUrl);
-    if (!fresh.contentUrl) return json({ error: "লিংক পাওয়া যায়নি", debug: fresh }, 502);
+    if (!fresh.contentUrl || isUrlExpired(fresh.contentUrl)) return json({ error: "নতুন বৈধ ভিডিও লিংক পাওয়া যায়নি", debug: fresh }, 502);
     list[idx].contentUrl = fresh.contentUrl;
     list[idx].videoUrl = fresh.contentUrl;
     list[idx].urlExpiry = getUrlExpiry(fresh.contentUrl);
@@ -340,7 +394,7 @@ async function autoRefreshAll(env, verbose = false) {
     } else {
       try {
         const fresh = await fetchFreshFromEmbed(embedUrl);
-        if (fresh.contentUrl) {
+        if (fresh.contentUrl && !isUrlExpired(fresh.contentUrl)) {
           movie.contentUrl = fresh.contentUrl;
           movie.videoUrl = fresh.contentUrl;
           movie.urlExpiry = getUrlExpiry(fresh.contentUrl);
@@ -351,7 +405,7 @@ async function autoRefreshAll(env, verbose = false) {
           ok++;
         } else {
           fail++;
-          if (verbose) failures.push({ id: movie.id, title: movie.title, reason: "no video URL" });
+          if (verbose) failures.push({ id: movie.id, title: movie.title, reason: "no reachable, unexpired video URL" });
         }
       } catch (e) {
         fail++;
@@ -369,97 +423,77 @@ async function autoRefreshAll(env, verbose = false) {
 // ================= FETCH FRESH (STRONG) =================
 async function fetchFreshFromEmbed(embedUrl) {
   const out = { contentUrl: "", title: "", thumbnail: "", views: 0, source: "" };
-  let text = "";
+  if (!embedUrl || !/^https?:\/\//i.test(embedUrl)) return out;
 
-  // ⭐ অনেক নমনীয় validation — শুধু setVideoUrl বা mp4/m3u8 থাকলেই accept
-  const isValid = (t) => {
-    if (!t || t.length < 100) return false;
-    if (/setVideoUrl(?:High|Low)?\s*\(/i.test(t)) return true;
-    if (/https?:\/\/[^"'\s<>\\]+\.(?:mp4|m3u8)/i.test(t)) return true;
-    if (/["'](?:file|contentUrl|videoUrl|src|source)["']\s*:\s*["'][^"']+\.(?:mp4|m3u8)/i.test(t)) return true;
-    if (/"contentUrl"\s*:/i.test(t)) return true;
-    return false;
-  };
+  const attempts = [
+    ["jina-html", async () => {
+      const r = await fetch("https://r.jina.ai/" + embedUrl, {
+        headers: { "Accept": "text/plain", "X-Return-Format": "html", "User-Agent": "Mozilla/5.0" }
+      });
+      return r.ok ? await r.text() : null;
+    }],
+    ["jina-text", async () => {
+      const r = await fetch("https://r.jina.ai/" + embedUrl, {
+        headers: { "Accept": "text/plain", "X-Return-Format": "text", "User-Agent": "Mozilla/5.0" }
+      });
+      return r.ok ? await r.text() : null;
+    }],
+    ["allorigins", async () => {
+      const r = await fetch("https://api.allorigins.win/raw?url=" + encodeURIComponent(embedUrl));
+      return r.ok ? await r.text() : null;
+    }],
+    ["corsproxy", async () => {
+      const r = await fetch("https://corsproxy.io/?url=" + encodeURIComponent(embedUrl));
+      return r.ok ? await r.text() : null;
+    }],
+    ["direct", async () => {
+      const r = await fetch(embedUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
+          "Referer": embedUrl,
+          "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9"
+        },
+        redirect: "follow"
+      });
+      return r.ok ? await r.text() : null;
+    }]
+  ];
 
-  const tryText = async (fn, label) => {
+  let selectedText = "";
+  for (const [label, loadText] of attempts) {
     try {
-      const t = await fn();
-      if (isValid(t)) { text = t; out.source = label; return true; }
+      const text = await loadText();
+      if (!text || text.length < 50) continue;
+
+      const extracted = normalizeVideoUrl(extractVideoUrl(text), embedUrl);
+      // Do not accept a page merely because it contains a player function.
+      // The actual extracted signed URL must be unexpired and reachable.
+      if (!extracted || isUrlExpired(extracted)) continue;
+      if (!(await probeVideoUrl(extracted, embedUrl))) continue;
+
+      out.contentUrl = extracted;
+      out.source = label;
+      selectedText = text;
+      break;
     } catch (e) {}
-    return false;
-  };
+  }
 
-  // ১. jina HTML — সবচেয়ে reliable
-  if (!text) await tryText(async () => {
-    const r = await fetch("https://r.jina.ai/" + embedUrl, {
-      headers: {
-        "Accept": "text/plain",
-        "X-Return-Format": "html",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36"
-      }
-    });
-    return r.ok ? await r.text() : null;
-  }, "jina-html");
+  if (!selectedText) return out;
 
-  // ২. jina text
-  if (!text) await tryText(async () => {
-    const r = await fetch("https://r.jina.ai/" + embedUrl, {
-      headers: {
-        "Accept": "text/plain",
-        "X-Return-Format": "text",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36"
-      }
-    });
-    return r.ok ? await r.text() : null;
-  }, "jina-text");
-
-  // ৩. allorigins
-  if (!text) await tryText(async () => {
-    const r = await fetch("https://api.allorigins.win/raw?url=" + encodeURIComponent(embedUrl));
-    return r.ok ? await r.text() : null;
-  }, "allorigins");
-
-  // ৪. corsproxy
-  if (!text) await tryText(async () => {
-    const r = await fetch("https://corsproxy.io/?url=" + encodeURIComponent(embedUrl));
-    return r.ok ? await r.text() : null;
-  }, "corsproxy");
-
-  // ৫. direct
-  if (!text) await tryText(async () => {
-    const r = await fetch(embedUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-        "Referer": "https://expmle.com/",
-        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-      redirect: "follow"
-    });
-    return r.ok ? await r.text() : null;
-  }, "direct");
-
-  if (!text) return out;
-
-  // ⭐ Video URL extract
-  out.contentUrl = extractVideoUrl(text);
-
-  // Title
-  let m = text.match(/<title>([^<]+)<\/title>/i) ||
-          text.match(/"name"\s*:\s*"([^"]+)"/i) ||
-          text.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)/i);
+  let m = selectedText.match(/<title[^>]*>([^<]+)<\/title>/i) ||
+          selectedText.match(/"name"\s*:\s*"([^"]+)"/i) ||
+          selectedText.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)/i);
   if (m) out.title = decodeHtml(m[1]).trim();
 
-  // Thumbnail
-  m = text.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)/i) ||
-      text.match(/"thumbnailUrl"\s*:\s*\[\s*"([^"]+)"/i) ||
-      text.match(/"thumbnailUrl"\s*:\s*"([^"]+)"/i) ||
-      text.match(/"poster"\s*:\s*"([^"]+)"/i);
+  m = selectedText.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)/i) ||
+      selectedText.match(/"thumbnailUrl"\s*:\s*\[\s*"([^"]+)"/i) ||
+      selectedText.match(/"thumbnailUrl"\s*:\s*"([^"]+)"/i) ||
+      selectedText.match(/"poster"\s*:\s*"([^"]+)"/i);
   if (m) out.thumbnail = decodeHtml(m[1]);
 
-  // Views
-  m = text.match(/"userInteractionCount"\s*:\s*"?(\d+)"?/i) ||
-      text.match(/(\d[\d,]+)\s*views/i);
+  m = selectedText.match(/"userInteractionCount"\s*:\s*"?(\d+)"?/i) ||
+      selectedText.match(/(\d[\d,]+)\s*views/i);
   if (m) out.views = parseInt(m[1].replace(/,/g, ""), 10) || 0;
 
   return out;
