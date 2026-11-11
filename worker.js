@@ -1198,34 +1198,85 @@ function adminPage() {
   P.push(' if(n==="bm"){$("tbm").classList.remove("hidden");$("t4").classList.add("active")}');
   P.push('}');
   P.push('function reset(){$("eid").value="";$("title").value="";$("vurl").value="";$("thumb").value="";$("videoIdField").value="";$("embedUrl").value="";$("contentUrl").value="";$("ft").textContent="Add / Edit Movie";$("sb").textContent="Add Movie";$("cb").classList.add("hidden")}');
-  P.push('function parseViewSource(){');
-  P.push('  var text=$("viewSource").value;var m=$("psm");');
-  P.push('  if(!text||!text.trim()){m.textContent="Paste source first";m.className="msg err show";return}');
-  P.push('  var found=[];var title="";');
-  P.push('  var tm=text.match(/<title>([^<]+)<\\/title>/i);');
-  P.push('  if(tm){title=tm[1].trim();found.push("Title")}');
-  P.push('  var embedUrl="";');
-  P.push('  var iframes=text.match(/<iframe[\\s\\S]*?>/gi)||[];');
-  P.push('  for(var i=0;i<iframes.length;i++){var sm=iframes[i].match(/src\\s*=\\s*["\']([^"\']+)["\']/i);if(sm&&/embedframe|embed\\/|player\\//i.test(sm[1])){embedUrl=sm[1];break}}');
-  P.push('  if(embedUrl){embedUrl=embedUrl.replace(/&amp;/g,"&");found.push("Embed URL")}');
-  P.push('  var contentUrl="";');
-  P.push('  var cm=text.match(/setVideoUrlHigh\\s*\\(\\s*[\'"]([^\'"]+)[\'"]/i);');
-  P.push('  if(!cm)cm=text.match(/setVideoUrlLow\\s*\\(\\s*[\'"]([^\'"]+)[\'"]/i);');
-  P.push('  if(!cm)cm=text.match(/setVideoUrl\\s*\\(\\s*[\'"]([^\'"]+)[\'"]/i);');
-  P.push('  if(!cm)cm=text.match(/(https?:\\/\\/[^"\'\\s<>]+\\.mp4[^"\'\\s<>]*)/i);');
-  P.push('  if(cm){contentUrl=cm[1].replace(/&amp;/g,"&").replace(/\\\\\\//g,"/");found.push("Content URL")}');
-  P.push('  var thumb="";');
-  P.push('  var thm=text.match(/"thumbnailUrl"\\s*:\\s*\\[\\s*"([^"]+)"/i)||text.match(/"thumbnailUrl"\\s*:\\s*"([^"]+)"/i);');
-  P.push('  if(thm){thumb=thm[1].replace(/&amp;/g,"&");found.push("Thumbnail")}');
-  P.push('  if(title)$("title").value=title;');
-  P.push('  if(embedUrl)$("embedUrl").value=embedUrl;');
-  P.push('  if(contentUrl)$("contentUrl").value=contentUrl;');
-  P.push('  if(thumb)$("thumb").value=thumb;');
-  P.push('  if(contentUrl)$("vurl").value=contentUrl;else if(embedUrl)$("vurl").value=embedUrl;');
-  P.push('  if(embedUrl){var vm=embedUrl.match(/\\/([a-zA-Z0-9\\-]+)\\/?$/);if(vm)$("videoIdField").value=vm[1]}');
-  P.push('  if(found.length){m.innerHTML="✅ Found: <b>"+found.join(", ")+"</b>";m.className="msg ok show";m.style.color="#b6ffb6"}');
-  P.push('  else{m.innerHTML="❌ Nothing found";m.className="msg err show";m.style.color="#ffb6b6"}');
-  P.push('}');
+  function parseViewSource(){
+  var raw = $("viewSource").value;
+  var m = $("psm");
+  if(!raw || !raw.trim()){m.textContent="Paste source first";m.className="msg err show";return}
+  
+  // ⚡ STEP 1: Decode HTML entities so &lt;iframe becomes <iframe
+  var text = raw
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
+  
+  var found=[], title="", embedUrl="", contentUrl="", thumb="";
+  
+  // Title
+  var tm = text.match(/<title>([^<]+)<\/title>/i);
+  if(tm){title=tm[1].trim();found.push("Title")}
+  
+  // ⚡ STEP 2: Find iframe — now works because entities are decoded
+  var iframes = text.match(/<iframe[\s\S]*?>/gi) || [];
+  for(var i=0;i<iframes.length;i++){
+    var sm = iframes[i].match(/src\s*=\s*["']([^"']+)["']/i);
+    if(sm && /embedframe|embed\/|player\//i.test(sm[1])){
+      embedUrl = sm[1].replace(/&amp;/g,"&");
+      break;
+    }
+  }
+  if(embedUrl) found.push("Embed URL");
+  
+  // Also try input value attribute pattern
+  if(!embedUrl){
+    var vm = text.match(/id=["']copy-video-embed["'][^>]*value=["']([^"']+)["']/i);
+    if(vm){
+      var inner = vm[1].replace(/&amp;/g,"&");
+      var im = inner.match(/src\s*=\s*["']([^"']+)["']/i);
+      if(im){embedUrl = im[1];found.push("Embed URL (input)")}
+    }
+  }
+  
+  // Content URL — video link from setVideoUrl or .mp4
+  var cm = text.match(/setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]/i)
+        || text.match(/setVideoUrlLow\s*\(\s*['"]([^'"]+)['"]/i)
+        || text.match(/setVideoUrl\s*\(\s*['"]([^'"]+)['"]/i)
+        || text.match(/"contentUrl"\s*:\s*"([^"]+)"/i)
+        || text.match(/(https?:\/\/[^"'\s<>]+\.mp4[^"'\s<>]*)/i)
+        || text.match(/(https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*)/i);
+  if(cm){contentUrl=cm[1].replace(/&amp;/g,"&").replace(/\\\//g,"/");found.push("Content URL")}
+  
+  // Thumbnail
+  var thm = text.match(/"thumbnailUrl"\s*:\s*\[\s*"([^"]+)"/i)
+         || text.match(/"thumbnailUrl"\s*:\s*"([^"]+)"/i)
+         || text.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)/i);
+  if(thm){thumb=thm[1].replace(/&amp;/g,"&");found.push("Thumbnail")}
+  
+  // Fill fields
+  if(title)     $("title").value       = title;
+  if(embedUrl)  $("embedUrl").value    = embedUrl;
+  if(contentUrl)$("contentUrl").value  = contentUrl;
+  if(thumb)     $("thumb").value       = thumb;
+  if(contentUrl)     $("vurl").value = contentUrl;
+  else if(embedUrl)  $("vurl").value = embedUrl;
+  
+  // Video ID from embed URL last segment
+  if(embedUrl){
+    var vm2 = embedUrl.match(/\/([a-zA-Z0-9\-]+)\/?$/);
+    if(vm2) $("videoIdField").value = vm2[1];
+  }
+  
+  if(found.length){
+    m.innerHTML = "✅ Found: <b>" + found.join(", ") + "</b>";
+    m.className = "msg ok show";
+    m.style.color = "#b6ffb6";
+  } else {
+    m.innerHTML = "❌ Nothing found — try full View Source (Ctrl+U)";
+    m.className = "msg err show";
+    m.style.color = "#ffb6b6";
+  }
+}
   P.push('async function saveMovie(){');
   P.push('  var eid=$("eid").value;var title=$("title").value.trim();var embedUrl=$("embedUrl").value.trim();');
   P.push('  var contentUrl=$("contentUrl").value.trim();var thumb=$("thumb").value.trim();');
