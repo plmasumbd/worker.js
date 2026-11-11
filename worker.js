@@ -938,7 +938,7 @@ function showAdWithContent(adUrl){
   ifr.scrolling="no";
   ifr.allow="autoplay; fullscreen";
   overlay.insertBefore(ifr,overlay.firstChild);
-  var totalSecs=4;
+  var totalSecs=7;
   adEndsAt=Date.now()+totalSecs*1000;
   $("adTimer").style.display="";
   $("adTimer").textContent=totalSecs+"s";
@@ -947,7 +947,7 @@ function showAdWithContent(adUrl){
   // ⚡ Show skip after 2s
   setTimeout(function(){
     if(!videoReady)$("adSkipBtn").classList.add("show");
-  },2000);
+  },4000);
   adTimerInterval=setInterval(function(){
     var left=Math.ceil((adEndsAt-Date.now())/1000);
     if(left<=0){
