@@ -1214,7 +1214,7 @@ function adminPage() {
   P.push('  var thumb="";');
   P.push('  var thm=text.match(/"thumbnailUrl"\\s*:\\s*\\[\\s*"([^"]+)"/i)||text.match(/"thumbnailUrl"\\s*:\\s*"([^"]+)"/i);');
   P.push('  if(thm){thumb=thm[1].replace(/&amp;/g,"&");found.push("Thumbnail")}');
-  P.push('  if(title)$("title").value=title;');
+  P.push('  if(title)$("title").value=String(title).replace(/&sol;/g,"/").replace(/&apos;/g,"\'").replace(/&quot;/g,"\\"").replace(/&#x27;/gi,"\'").replace(/&#39;/g,"\'").replace(/&#x2F;/gi,"/").replace(/&#x3D;/gi,"=").replace(/&nbsp;/g," ").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&amp;/g,"&");');
   P.push('  if(embedUrl)$("embedUrl").value=embedUrl;');
   P.push('  if(contentUrl)$("contentUrl").value=contentUrl;');
   P.push('  if(thumb)$("thumb").value=thumb;');
