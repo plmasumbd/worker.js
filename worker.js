@@ -780,7 +780,7 @@ loadAdFrameUrl().then(function(){load(1)});
 }
 
 // ═══════════════════════════════════════════════════════════
-// 🎬 Watch Page
+// 🎬 Watch Page — with Continue Watching + Popup Fix
 // ═══════════════════════════════════════════════════════════
 function watchPage(id) {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Watch</title>
@@ -821,7 +821,11 @@ header a.logo{color:#ff0040;font-size:22px;font-weight:bold;text-decoration:none
 .ad-close.show{display:block}.ad-close:hover{background:#d10035}
 .ad-skip{position:absolute;top:20px;right:20px;z-index:100;background:rgba(0,0,0,.7);color:#fff;padding:8px 16px;border-radius:6px;font-size:12px;border:1px solid #555;cursor:pointer;display:none}
 .ad-skip.show{display:block}.ad-skip:hover{background:#333}
-@media(max-width:768px){.title{font-size:16px}.related-grid{grid-template-columns:repeat(2,1fr)}}
+.resume-banner{position:absolute;bottom:80px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.92);color:#fff;padding:12px 20px;border-radius:30px;font-size:14px;z-index:20;display:none;align-items:center;gap:12px;border:1px solid #ff0040;box-shadow:0 4px 20px rgba(0,0,0,.6);white-space:nowrap}
+.resume-banner.show{display:flex}
+.resume-banner button{background:#ff0040;color:#fff;border:none;padding:6px 14px;border-radius:20px;cursor:pointer;font-size:13px;font-weight:bold}
+.resume-banner .close-x{background:transparent;color:#aaa;padding:0;font-size:18px;width:24px;height:24px;border-radius:50%}
+@media(max-width:768px){.title{font-size:16px}.related-grid{grid-template-columns:repeat(2,1fr)}.resume-banner{font-size:12px;padding:10px 14px;bottom:60px}}
 </style></head><body>
 <header><a href="/" class="logo">AdultMovie</a><a href="/" class="back-btn" onclick="if(history.length>1){event.preventDefault();history.back()}">← Home</a></header>
 <div class="wrap">
@@ -832,6 +836,7 @@ header a.logo{color:#ff0040;font-size:22px;font-weight:bold;text-decoration:none
 </div>
 <div class="loader-box" id="loadingBox"><div class="spinner"></div><div class="loader-text" id="loaderText">Loading Video...</div></div>
 <div class="player" id="pb" style="display:none;"></div>
+<div class="resume-banner" id="resumeBanner"><span id="resumeText"></span><button onclick="resumePlayback()">▶ Resume</button><button class="close-x" onclick="dismissResume()">✕</button></div>
 <div class="video-error" id="videoError"><h3>⚠️ Video Not Loading</h3><p>Try reloading or pick another video.</p><button onclick="location.reload()">🔄 Reload</button></div>
 </div>
 <div class="title" id="t">Loading...</div>
@@ -851,6 +856,13 @@ function markWatched(id){try{var a=JSON.parse(localStorage.getItem("watched_ids"
 function injectAds(id,code){var c=$(id);if(!c)return;c.innerHTML="";var t=document.createElement("div");t.innerHTML=code;var sc=[];Array.from(t.childNodes).forEach(function(n){if(n.tagName==="SCRIPT"){var s=document.createElement("script");if(n.src)s.src=n.src;else s.textContent=n.textContent;sc.push(s)}else{c.appendChild(n.cloneNode(true))}});sc.forEach(function(s){c.appendChild(s)})}
 var id=new URLSearchParams(location.search).get("id");
 var movieData=null,retryCount=0,maxRetries=3,adTimerInterval=null,adEndsAt=0,videoReady=false,videoEl=null,adClosed=false;
+
+function getWatchProgress(mid){try{var all=JSON.parse(localStorage.getItem("watch_progress")||"{}");return all[String(mid)]||null}catch(e){return null}}
+function saveWatchProgress(mid,time,duration){try{var all=JSON.parse(localStorage.getItem("watch_progress")||"{}");if(time<5||!duration||time>duration-10){delete all[String(mid)]}else{all[String(mid)]={time:time,duration:duration,updated:Date.now()}}var keys=Object.keys(all);if(keys.length>100){keys.sort(function(a,b){return all[a].updated-all[b].updated});for(var i=0;i<keys.length-100;i++)delete all[keys[i]]}localStorage.setItem("watch_progress",JSON.stringify(all))}catch(e){}}
+function fmtTime(sec){sec=Math.floor(sec||0);var m=Math.floor(sec/60);var s=sec%60;return m+":"+(s<10?"0":"")+s}
+function showResumeBanner(p){var b=$("resumeBanner");if(!b||!p)return;$("resumeText").textContent="▶ Resume from "+fmtTime(p.time)+"?";b.classList.add("show")}
+function resumePlayback(){var p=getWatchProgress(movieData.id);if(videoEl&&p&&p.time>0){videoEl.currentTime=p.time;videoEl.play().catch(function(){})}$("resumeBanner").classList.remove("show")}
+function dismissResume(){$("resumeBanner").classList.remove("show")}
 
 function hiddenIframe(url){
   return new Promise(function(resolve){
@@ -946,6 +958,7 @@ function showAdWithContent(adUrl){
   ifr.src=adUrl;
   ifr.scrolling="no";
   ifr.allow="autoplay; fullscreen";
+  ifr.setAttribute("sandbox","allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads allow-top-navigation-by-user-activation allow-pointer-lock allow-presentation");
   overlay.insertBefore(ifr,overlay.firstChild);
   var totalSecs=7;
   adEndsAt=Date.now()+totalSecs*1000;
@@ -1095,6 +1108,23 @@ function playContent(url){
   v.oncanplay=function(){finish("ok")};
   setTimeout(function(){if(!finished&&v.readyState<2)finish("retry")},10000);
   pb.appendChild(v);trackView();
+  
+  // 💾 Continue Watching tracking
+  var savedP=getWatchProgress(movieData.id);
+  if(savedP&&savedP.time>10&&savedP.duration>0){
+    setTimeout(function(){showResumeBanner(savedP)},1500);
+  }
+  var lastSave=0;
+  v.addEventListener("timeupdate",function(){
+    var now=Date.now();
+    if(now-lastSave>5000){lastSave=now;saveWatchProgress(movieData.id,v.currentTime,v.duration)}
+  });
+  v.addEventListener("pause",function(){saveWatchProgress(movieData.id,v.currentTime,v.duration)});
+  v.addEventListener("ended",function(){
+    try{var all=JSON.parse(localStorage.getItem("watch_progress")||"{}");delete all[String(movieData.id)];localStorage.setItem("watch_progress",JSON.stringify(all))}catch(e){}
+  });
+  v.addEventListener("play",function(){$("resumeBanner").classList.remove("show")});
+  
   try{fetch("/api/ads").then(function(r){return r.json()}).then(function(ad){if(ad.code&&ad.code.trim())injectAds("adBox",ad.code)})}catch(e){}
 }
 
