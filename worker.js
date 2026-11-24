@@ -483,6 +483,20 @@ async function listMovies(env, url) {
   const noShuffle = url.searchParams.get("noshuffle") === "1";
   const raw = await env.MOVIES.get("movie_list");
   let list = raw ? JSON.parse(raw) : [];
+
+  // ✅ AUTO-MIGRATION: পুরনো ভিডিওতে previewUrl অটো বসানো
+  let migrated = 0;
+  for (const m of list) {
+    if (m.previewUrl === undefined && m.thumbnail) {
+      m.previewUrl = derivePreviewUrl(m.thumbnail, "");
+      if (m.previewUrl) migrated++;
+    }
+  }
+  if (migrated > 0) {
+    await env.MOVIES.put("movie_list", JSON.stringify(list));
+    console.log(`✅ Migrated ${migrated} movies with previewUrl`);
+  }
+
   const watchedSet = new Set(watchedParam.split(",").map(x => x.trim()).filter(Boolean));
   if (search) list = list.filter(m => m.title.toLowerCase().includes(search));
   if (!noShuffle) {
