@@ -1383,10 +1383,10 @@ function adminPage() {
   P.push('  var tm=text.match(/<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']/i)||text.match(/<title>([^<]+)<\\/title>/i);');
   P.push('  if(tm){title=tm[1].trim();found.push("Title")}');
   P.push('  var embedUrl="";var iframes=text.match(/<iframe[\\s\\S]*?>/gi)||[];for(var i=0;i<iframes.length;i++){var sm=iframes[i].match(/src\\s*=\\s*["\']([^"\']+)["\']/i);if(sm&&/embedframe|embed\\/|player\\//i.test(sm[1])){embedUrl=sm[1].replace(/&amp;/g,"&");break}}if(!embedUrl){var iv=text.match(/id=["\']copy-video-embed["\'][^>]*value=["\']([^"\']+)["\']/i);if(iv){var im=iv[1].match(/src\\s*=\\s*["\']([^"\']+)["\']/i);if(im)embedUrl=im[1].replace(/&amp;/g,"&")}}if(embedUrl)found.push("Embed URL");');
-  P.push('  var contentUrl="";var cm=text.match(/setVideoUrlLow\\s*\\(\\s*[\\'"]([^\\'"]+)[\\'"]/i)||text.match(/setVideoUrl\\s*\\(\\s*[\\'"]([^\\'"]+)[\\'"]/i);');
-  P.push('  var hm=text.match(/setVideoUrlHigh\\s*\\(\\s*[\\'"]([^\\'"]+)[\\'"]/i);');
-  P.push('  var hlsm=text.match(/setVideoHLS\\s*\\(\\s*[\\'"]([^\\'"]+)[\\'"]/i)||text.match(/(https?:\\/\\/[^"\\'\\s<>]+\\.m3u8[^"\\'\\s<>]*)/i);');
-  P.push('  if(!cm)cm=text.match(/(https?:\\/\\/[^"\\'\\s<>]+\\.mp4[^"\\'\\s<>]*)/i);');
+  P.push('  var contentUrl="";var cm=text.match(/setVideoUrlLow\\s*\\(\\s*[\\x22\\x27]([^\\x22\\x27]+)[\\x22\\x27]/i)||text.match(/setVideoUrl\\s*\\(\\s*[\\x22\\x27]([^\\x22\\x27]+)[\\x22\\x27]/i);');
+  P.push('  var hm=text.match(/setVideoUrlHigh\\s*\\(\\s*[\\x22\\x27]([^\\x22\\x27]+)[\\x22\\x27]/i);');
+  P.push('  var hlsm=text.match(/setVideoHLS\\s*\\(\\s*[\\x22\\x27]([^\\x22\\x27]+)[\\x22\\x27]/i)||text.match(/(https?:\\/\\/[^\\x22\\x27\\s<>]+\\.m3u8[^\\x22\\x27\\s<>]*)/i);');
+  P.push('  if(!cm)cm=text.match(/(https?:\\/\\/[^\\x22\\x27\\s<>]+\\.mp4[^\\x22\\x27\\s<>]*)/i);');
   P.push('  if(cm){contentUrl=cm[1].replace(/&amp;/g,"&");found.push("SD URL")}');
   P.push('  if(hm){$("hdUrl").value=hm[1].replace(/&amp;/g,"&");found.push("HD URL")}');
   P.push('  if(hlsm){$("hlsUrl").value=hlsm[1].replace(/&amp;/g,"&");found.push("HLS URL")}');
