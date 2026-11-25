@@ -92,7 +92,7 @@ async function streamVideo(request, env, url) {
   const idx = list.findIndex(m => m.id === id);
   if (idx === -1) return new Response("Not found", { status: 404 });
   const movie = list[idx];
-  let videoUrl = quality === "hd" ? (movie.hdUrl || movie.contentUrl || "") : (movie.sdUrl || movie.contentUrl || "");
+  let videoUrl = quality === "hd" ? (movie.hdUrl || "") : (movie.sdUrl || movie.contentUrl || "");
   const embedUrl = movie.embedUrl || "";
   const range = request.headers.get("Range");
 
@@ -123,11 +123,14 @@ async function streamVideo(request, env, url) {
     if (oldRes && (oldRes.ok || oldRes.status === 206)) {
       if (refreshPromise) {
         refreshPromise.then(fresh => {
-          if (fresh && fresh.contentUrl && fresh.contentUrl !== videoUrl) {
-            list[idx].contentUrl = fresh.contentUrl;
-            list[idx].videoUrl = fresh.contentUrl;
+          if (fresh && fresh.contentUrl) {
+            if (fresh.sdUrl) list[idx].sdUrl = fresh.sdUrl;
+            if (fresh.hdUrl) list[idx].hdUrl = fresh.hdUrl;
+            if (fresh.hlsUrl) list[idx].hlsUrl = fresh.hlsUrl;
+            list[idx].contentUrl = fresh.sdUrl || fresh.contentUrl;
+            list[idx].videoUrl = list[idx].contentUrl;
             list[idx].lastRefresh = Date.now();
-            list[idx].urlExpiry = getUrlExpiry(fresh.contentUrl);
+            list[idx].urlExpiry = getUrlExpiry(list[idx].contentUrl);
             return env.MOVIES.put("movie_list", JSON.stringify(list));
           }
         }).catch(() => {});
@@ -140,14 +143,19 @@ async function streamVideo(request, env, url) {
     const fresh = await refreshPromise;
     if (fresh && fresh.contentUrl) {
       try {
-        const up2 = await fetch(fresh.contentUrl, { headers: makeHeaders(fresh.contentUrl), redirect: "follow" });
+        if (fresh.sdUrl) list[idx].sdUrl = fresh.sdUrl;
+        if (fresh.hdUrl) list[idx].hdUrl = fresh.hdUrl;
+        if (fresh.hlsUrl) list[idx].hlsUrl = fresh.hlsUrl;
+        list[idx].contentUrl = fresh.sdUrl || fresh.contentUrl;
+        list[idx].videoUrl = list[idx].contentUrl;
+        list[idx].lastRefresh = Date.now();
+        list[idx].urlExpiry = getUrlExpiry(list[idx].contentUrl);
+        const refreshedUrl = quality === "hd" ? (list[idx].hdUrl || "") : (list[idx].sdUrl || list[idx].contentUrl);
+        await env.MOVIES.put("movie_list", JSON.stringify(list));
+        if (!refreshedUrl) return new Response("Selected quality unavailable", { status: 404 });
+        const up2 = await fetch(refreshedUrl, { headers: makeHeaders(refreshedUrl), redirect: "follow" });
         if (up2.ok || up2.status === 206) {
-          list[idx].contentUrl = fresh.contentUrl;
-          list[idx].videoUrl = fresh.contentUrl;
-          list[idx].lastRefresh = Date.now();
-          list[idx].urlExpiry = getUrlExpiry(fresh.contentUrl);
-          await env.MOVIES.put("movie_list", JSON.stringify(list));
-          return buildStreamResponse(up2, fresh.contentUrl);
+          return buildStreamResponse(up2, refreshedUrl);
         }
       } catch (e) {}
     }
@@ -184,7 +192,7 @@ async function fetchFreshFromEmbed(embedUrl) {
   const out = { contentUrl: "", sdUrl: "", hdUrl: "", hlsUrl: "", title: "", thumbnail: "", views: 0, source: "" };
   const originRef = (() => { try { return new URL(embedUrl).origin + "/"; } catch (e) { return ""; } })();
 
-  const isValid = (t) => t && t.length > 100 && (/setVideoUrl(?:High|Low)?\s*\(/i.test(t) || /https?:\/\/[^"'\s<>\\]+\.(?:mp4|m3u8)/i.test(t));
+  const isValid = (t) => t && t.length > 100 && (/(?:setVideoUrl(?:High|Low)?|setVideoHLS)\s*\(/i.test(t) || /https?:\/\/[^"'\s<>\\]+\.(?:mp4|m3u8)/i.test(t));
 
   const fetchers = [
     fetch("https://r.jina.ai/" + embedUrl, { headers: { "Accept": "text/plain", "X-Return-Format": "html", "User-Agent": "Mozilla/5.0" } }).then(r => r.ok ? r.text() : null).catch(() => null),
@@ -193,24 +201,16 @@ async function fetchFreshFromEmbed(embedUrl) {
     fetch(embedUrl, { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36", "Referer": originRef, "Accept": "text/html,*/*" }, redirect: "follow" }).then(r => r.ok ? r.text() : null).catch(() => null),
   ];
 
-  const validPromises = fetchers.map(p => p.then(t => {
-    if (isValid(t)) return t;
-    throw new Error("invalid");
-  }));
-
-  let text = await Promise.any(validPromises).catch(() => null);
-
-  if (!text) {
-    const all = await Promise.all(fetchers);
-    text = all.find(t => t && t.length > 100) || null;
-  }
-
-  if (!text) return out;
+  // সব fetch source-এর response একসাথে পরীক্ষা করি; প্রথম response-এ SD থাকলেও
+  // অন্য response-এ থাকা HD/HLS যেন বাদ না পড়ে।
+  const allTexts = (await Promise.all(fetchers)).filter(t => t && t.length > 100);
+  if (!allTexts.length) return out;
+  const text = allTexts.join("\n");
   const sources = extractVideoSources(text);
-  out.contentUrl = sources.sdUrl || sources.hdUrl || sources.hlsUrl || extractVideoUrl(text);
-  out.sdUrl = sources.sdUrl;
+  out.sdUrl = sources.sdUrl || (!sources.hdUrl && !sources.hlsUrl ? extractVideoUrl(text) : "");
   out.hdUrl = sources.hdUrl;
   out.hlsUrl = sources.hlsUrl;
+  out.contentUrl = out.sdUrl || out.hdUrl || out.hlsUrl;
   out.source = "parallel";
 
   let m = text.match(/<title>([^<]+)<\/title>/i) || text.match(/"name"\s*:\s*"([^"]+)"/i);
@@ -222,11 +222,13 @@ async function fetchFreshFromEmbed(embedUrl) {
 
 
 function extractVideoSources(text) {
-  const clean = (u) => String(u || "").replace(/\\\//g, "/").replace(/&amp;/g, "&").trim();
-  const get = (re) => { const m = String(text || "").match(re); return m && m[1] ? clean(m[1]) : ""; };
+  const sourceText = String(text || "");
+  const clean = (u) => String(u || "").replace(/\\\//g, "/").replace(/\\u0026/gi, "&").replace(/\\u003d/gi, "=").replace(/\\u003f/gi, "?").replace(/&amp;/g, "&").trim();
+  const get = (re) => { const m = sourceText.match(re); return m && m[1] ? clean(m[1]) : ""; };
   return {
-    hdUrl: get(/(?:html5player\.)?setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]/i),
+    // SD/HD/HLS একই player source declaration থেকে আলাদাভাবে সংগ্রহ করা হয়।
     sdUrl: get(/(?:html5player\.)?setVideoUrlLow\s*\(\s*['"]([^'"]+)['"]/i) || get(/(?:html5player\.)?setVideoUrl\s*\(\s*['"]([^'"]+)['"]/i),
+    hdUrl: get(/(?:html5player\.)?setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]/i),
     hlsUrl: get(/(?:html5player\.)?setVideoHLS\s*\(\s*['"]([^'"]+)['"]/i) || get(/(https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*)/i)
   };
 }
@@ -318,6 +320,9 @@ async function refreshMovie(request, env) {
         const fresh = await fetchFreshFromEmbed(embedUrl);
         if (fresh.contentUrl) {
           contentUrl = fresh.contentUrl; source = fresh.source || "auto";
+          if (fresh.sdUrl) list[idx].sdUrl = fresh.sdUrl;
+          if (fresh.hdUrl) list[idx].hdUrl = fresh.hdUrl;
+          if (fresh.hlsUrl) list[idx].hlsUrl = fresh.hlsUrl;
           if (fresh.title) list[idx].title = fresh.title;
           if (fresh.thumbnail) list[idx].thumbnail = fresh.thumbnail;
         }
@@ -325,7 +330,7 @@ async function refreshMovie(request, env) {
     }
   }
   if (!contentUrl) return json({ error: "লিংক পাওয়া যায়নি" }, 502);
-  list[idx].contentUrl = contentUrl;
+  list[idx].contentUrl = list[idx].sdUrl || contentUrl;
   list[idx].sdUrl = list[idx].sdUrl || contentUrl;
   list[idx].videoUrl = contentUrl;
   list[idx].urlExpiry = getUrlExpiry(contentUrl);
@@ -357,9 +362,12 @@ async function autoRefreshAll(env, verbose = false) {
       try {
         const fresh = await fetchFreshFromEmbed(embedUrl);
         if (fresh.contentUrl) {
-          movie.contentUrl = fresh.contentUrl;
-          movie.videoUrl = fresh.contentUrl;
-          movie.urlExpiry = getUrlExpiry(fresh.contentUrl);
+          if (fresh.sdUrl) movie.sdUrl = fresh.sdUrl;
+          if (fresh.hdUrl) movie.hdUrl = fresh.hdUrl;
+          if (fresh.hlsUrl) movie.hlsUrl = fresh.hlsUrl;
+          movie.contentUrl = fresh.sdUrl || fresh.contentUrl;
+          movie.videoUrl = movie.contentUrl;
+          movie.urlExpiry = getUrlExpiry(movie.contentUrl);
           if (fresh.title) movie.title = fresh.title;
           if (fresh.thumbnail) movie.thumbnail = fresh.thumbnail;
           movie.lastRefresh = Date.now();
@@ -445,17 +453,20 @@ async function autoContent(request, env) {
     const now = Date.now();
     const expired = isUrlExpired(movie.contentUrl);
     const fresh = (now - (movie.lastRefresh || 0)) < CACHE_TTL;
-    if (!force && movie.contentUrl && fresh && !expired) return json({ success: true, contentUrl: movie.contentUrl, cached: true });
+    if (!force && movie.contentUrl && fresh && !expired) return json({ success: true, contentUrl: movie.sdUrl || movie.contentUrl, sdUrl: movie.sdUrl || movie.contentUrl, hdUrl: movie.hdUrl || "", hlsUrl: movie.hlsUrl || "", cached: true });
     const embedUrl = deriveEmbedUrl(movie);
     if (!embedUrl) return json({ error: "No embedUrl" }, 400);
     const freshData = await fetchFreshFromEmbed(embedUrl);
     if (freshData.contentUrl) {
-      list[idx].contentUrl = freshData.contentUrl;
-      list[idx].videoUrl = freshData.contentUrl;
+      if (freshData.sdUrl) list[idx].sdUrl = freshData.sdUrl;
+      if (freshData.hdUrl) list[idx].hdUrl = freshData.hdUrl;
+      if (freshData.hlsUrl) list[idx].hlsUrl = freshData.hlsUrl;
+      list[idx].contentUrl = freshData.sdUrl || freshData.contentUrl;
+      list[idx].videoUrl = list[idx].contentUrl;
       list[idx].lastRefresh = now;
-      list[idx].urlExpiry = getUrlExpiry(freshData.contentUrl);
+      list[idx].urlExpiry = getUrlExpiry(list[idx].contentUrl);
       await env.MOVIES.put("movie_list", JSON.stringify(list));
-      return json({ success: true, contentUrl: freshData.contentUrl });
+      return json({ success: true, contentUrl: list[idx].contentUrl, sdUrl: list[idx].sdUrl || "", hdUrl: list[idx].hdUrl || "", hlsUrl: list[idx].hlsUrl || "" });
     }
     if (movie.contentUrl && !expired) return json({ success: true, contentUrl: movie.contentUrl, stale: true });
     return json({ error: "লিংক পাওয়া যায়নি" }, 502);
@@ -483,7 +494,7 @@ async function fetchSourceData(request) {
     let videoId = "";
     if (embedUrl) { const em = embedUrl.match(/\/([a-zA-Z0-9\-]+)\/?$/); if (em) videoId = em[1]; }
     if (!fresh.contentUrl && !embedUrl) return json({ error: "লিংক পাওয়া যায়নি" }, 400);
-    return json({ success: true, data: { title: fresh.title, id: videoId, thumbnail: fresh.thumbnail, contentUrl: fresh.contentUrl, embedUrl: embedUrl, videoUrl: fresh.contentUrl || embedUrl } });
+    return json({ success: true, data: { title: fresh.title, id: videoId, thumbnail: fresh.thumbnail, contentUrl: fresh.sdUrl || fresh.contentUrl, sdUrl: fresh.sdUrl || "", hdUrl: fresh.hdUrl || "", hlsUrl: fresh.hlsUrl || "", embedUrl: embedUrl, videoUrl: fresh.sdUrl || fresh.contentUrl || embedUrl } });
   } catch (err) { return json({ error: "Failed: " + err.message }, 500); }
 }
 
@@ -1163,9 +1174,9 @@ function playContent(url){
   var options={sd:(movieData.sdUrl||movieData.contentUrl)?("/api/stream?id="+encodeURIComponent(movieData.id)+"&quality=sd"):url,hd:movieData.hdUrl?("/api/stream?id="+encodeURIComponent(movieData.id)+"&quality=hd"):"",hls:movieData.hlsUrl||""};
   if(qualitySel){
     qualitySel.innerHTML='<option value="sd">SD</option>';
-    if(options.hd)qualitySel.innerHTML+='<option value="hd">HD</option>';
-    if(options.hls)qualitySel.innerHTML+='<option value="hls">HLS</option>';
-    qualitySel.style.display=(options.hd||options.hls)?"block":"none";
+    qualitySel.innerHTML+='<option value="hd" '+(options.hd?'':'disabled')+'>HD'+(options.hd?'':' (not found)')+'</option>';
+    qualitySel.innerHTML+='<option value="hls" '+(options.hls?'':'disabled')+'>HLS'+(options.hls?'':' (not found)')+'</option>';
+    qualitySel.style.display="block";
     qualitySel.value=currentQuality;
     qualitySel.onchange=function(){switchQuality(qualitySel.value)};
   }
