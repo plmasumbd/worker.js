@@ -908,7 +908,7 @@ header a.logo{color:#ff0040;font-size:22px;font-weight:bold;text-decoration:none
 </div>
 <div class="loader-box" id="loadingBox"><div class="spinner"></div><div class="loader-text" id="loaderText">Loading Video...</div></div>
 <div class="player" id="pb" style="display:none;"></div>
-<div class="quality-bar" id="qualityBar" style="display:none"><select id="qualitySelect" aria-label="Video quality"><option value="hd">HD</option><option value="hls">Ultra HD</option></select><button id="rotateBtn" type="button">⛶ Rotate</button></div>
+<div class="quality-bar" id="qualityBar" style="display:none"><select id="qualitySelect" aria-label="Video quality"><option value="hls">Ultra HD</option><option value="hd">HD</option></select></div>
 <div class="video-error" id="videoError"><h3>⚠️ Video Not Loading</h3><p>Try reloading or pick another video.</p><button onclick="location.reload()">🔄 Reload</button></div>
 </div>
 <div class="title" id="t">Loading...</div>
@@ -1085,7 +1085,7 @@ async function loadData(){
     if(movieData.urlExpiry && Date.now()>(movieData.urlExpiry-60000))needsScrape=true;
     if(needsScrape && movieData.embedUrl){
       $("loadingBox").style.display="flex";
-      $("loaderText").textContent="Checking HD / Ultra HD links...";
+      $("loaderText").textContent="Loading Video...";
       silentScrape(movieData).finally(function(){playVideo()});
     } else playVideo();
     loadRelated();
@@ -1140,15 +1140,17 @@ async function playVideo(){
   $("loadingBox").style.display="flex";
   $("loaderText").textContent="Loading video...";
   retryCount=0;
-  playContent("/api/stream?id="+encodeURIComponent(movieData.id)+"&t="+Date.now());
+  playContent();
 }
 
 var activeHls=null,activeQuality="hd";
 var activeHls=null,activeQuality="hd";
-function playContent(url){
+function playContent(){
   var pb=$("pb");pb.innerHTML="";
   var v=document.createElement("video");
-  v.src=url;v.controls=true;v.autoplay=false;v.playsInline=true;v.preload="auto";
+  var hasUltra=!!(movieData&&movieData.hlsUrl);
+  activeQuality=hasUltra?"hls":"hd";
+  v.controls=true;v.autoplay=false;v.playsInline=true;v.preload="auto";
   v.style.cssText="width:100%;height:100%;object-fit:contain;background:#000";
   videoEl=v;
   var finished=false;
@@ -1160,24 +1162,35 @@ function playContent(url){
     } else if(state==="retry"){
       if(retryCount>=maxRetries){$("adOverlay").classList.remove("show");if(movieData){silentScrape(movieData).then(function(ok){if(ok){showVideoError();setTimeout(function(){location.reload()},100)}else showVideoError()})}else showVideoError();return}
       retryCount++;$("loadingBox").style.display="flex";$("loaderText").textContent="Loading video...";
-      setTimeout(function(){playContent("/api/stream?id="+encodeURIComponent(movieData.id)+"&quality=hd&t="+Date.now()+"&r="+retryCount)},800);
+      setTimeout(function(){playContent()},800);
     } else showVideoError();
   }
   v.onerror=function(){finish("retry")};v.onloadeddata=function(){finish("ok")};v.oncanplay=function(){finish("ok")};
   setTimeout(function(){if(!finished&&v.readyState<2)finish("retry")},10000);
   pb.appendChild(v);trackView();
-  $("qualityBar").style.display="flex";
-  var qs=$("qualitySelect");qs.value="hd";qs.querySelector('option[value="hls"]').disabled=!(movieData&&movieData.hlsUrl);
+  var qs=$("qualitySelect");
+  var hasHD=!!(movieData&&movieData.contentUrl);
+  var hasHLS=!!(movieData&&movieData.hlsUrl);
+  $("qualityBar").style.display=(hasHD&&hasHLS)?"flex":"none";
+  qs.value=hasHLS?"hls":"hd";
   qs.onchange=function(){switchQuality(qs.value)};
-  $("rotateBtn").onclick=async function(){
-    var wrap=$("playerWrap");
-    try{
-      if(!document.fullscreenElement){await wrap.requestFullscreen();if(screen.orientation&&screen.orientation.lock)await screen.orientation.lock("landscape")}
-      else{await document.exitFullscreen();if(screen.orientation&&screen.orientation.unlock)screen.orientation.unlock()}
-    }catch(e){try{await wrap.requestFullscreen()}catch(e2){}}
-  };
-  activeQuality="hd";
   if(activeHls){try{activeHls.destroy()}catch(e){}activeHls=null}
+  if(hasHLS){
+    if(v.canPlayType("application/vnd.apple.mpegurl")){v.src=movieData.hlsUrl;v.load()}
+    else if(window.Hls&&Hls.isSupported()){
+      activeHls=new Hls({enableWorker:true});
+      activeHls.loadSource(movieData.hlsUrl);
+      activeHls.attachMedia(v);
+    }else{
+      activeQuality="hd";
+      qs.value="hd";
+      v.src="/api/stream?id="+encodeURIComponent(movieData.id)+"&quality=hd&t="+Date.now();
+      v.load();
+    }
+  }else{
+    v.src="/api/stream?id="+encodeURIComponent(movieData.id)+"&quality=hd&t="+Date.now();
+    v.load();
+  }
   try{fetch("/api/ads").then(function(r){return r.json()}).then(function(ad){if(localStorage.getItem("admin_token"))return;if(ad.top)injectAds("watchTopAd",ad.top);if(ad.middle)injectAds("adBox",ad.middle);if(ad.sponsor)injectAds("watchSponsorAd",ad.sponsor);if(ad.footer)injectAds("watchFooterAd",ad.footer);else if(ad.code)injectAds("watchFooterAd",ad.code)})}catch(e){}
 }
 function switchQuality(q){
