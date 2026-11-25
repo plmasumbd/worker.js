@@ -85,14 +85,14 @@ function isUrlExpired(url) {
 // ═══════════════════════════════════════════════════════════
 async function streamVideo(request, env, url) {
   const id = url.searchParams.get("id");
+  const quality = url.searchParams.get("quality") || "sd";
   if (!id) return new Response("ID required", { status: 400 });
   const raw = await env.MOVIES.get("movie_list");
   const list = raw ? JSON.parse(raw) : [];
   const idx = list.findIndex(m => m.id === id);
   if (idx === -1) return new Response("Not found", { status: 404 });
   const movie = list[idx];
-  const quality = (url.searchParams.get("q") || "sd").toLowerCase();
-  let videoUrl = quality === "hd" ? (movie.hdUrl || movie.contentUrl || movie.sdUrl || "") : (movie.sdUrl || movie.contentUrl || "");
+  let videoUrl = quality === "hd" ? (movie.hdUrl || movie.contentUrl || "") : (movie.sdUrl || movie.contentUrl || "");
   const embedUrl = movie.embedUrl || "";
   const range = request.headers.get("Range");
 
@@ -124,13 +124,10 @@ async function streamVideo(request, env, url) {
       if (refreshPromise) {
         refreshPromise.then(fresh => {
           if (fresh && fresh.contentUrl && fresh.contentUrl !== videoUrl) {
-            list[idx].contentUrl = fresh.sdUrl || fresh.contentUrl;
-            list[idx].sdUrl = fresh.sdUrl || list[idx].sdUrl || "";
-            list[idx].hdUrl = fresh.hdUrl || list[idx].hdUrl || "";
-            list[idx].hlsUrl = fresh.hlsUrl || list[idx].hlsUrl || "";
-            list[idx].videoUrl = list[idx].contentUrl;
+            list[idx].contentUrl = fresh.contentUrl;
+            list[idx].videoUrl = fresh.contentUrl;
             list[idx].lastRefresh = Date.now();
-            list[idx].urlExpiry = getUrlExpiry(list[idx].contentUrl || list[idx].hdUrl || list[idx].hlsUrl);
+            list[idx].urlExpiry = getUrlExpiry(fresh.contentUrl);
             return env.MOVIES.put("movie_list", JSON.stringify(list));
           }
         }).catch(() => {});
@@ -145,13 +142,10 @@ async function streamVideo(request, env, url) {
       try {
         const up2 = await fetch(fresh.contentUrl, { headers: makeHeaders(fresh.contentUrl), redirect: "follow" });
         if (up2.ok || up2.status === 206) {
-          list[idx].contentUrl = fresh.sdUrl || fresh.contentUrl;
-          list[idx].sdUrl = fresh.sdUrl || list[idx].sdUrl || "";
-          list[idx].hdUrl = fresh.hdUrl || list[idx].hdUrl || "";
-          list[idx].hlsUrl = fresh.hlsUrl || list[idx].hlsUrl || "";
-          list[idx].videoUrl = list[idx].contentUrl;
+          list[idx].contentUrl = fresh.contentUrl;
+          list[idx].videoUrl = fresh.contentUrl;
           list[idx].lastRefresh = Date.now();
-          list[idx].urlExpiry = getUrlExpiry(list[idx].contentUrl || list[idx].hdUrl || list[idx].hlsUrl);
+          list[idx].urlExpiry = getUrlExpiry(fresh.contentUrl);
           await env.MOVIES.put("movie_list", JSON.stringify(list));
           return buildStreamResponse(up2, fresh.contentUrl);
         }
@@ -187,7 +181,7 @@ function guessContentType(url) {
 
 // ═══════════════════════════════════════════════════════════
 async function fetchFreshFromEmbed(embedUrl) {
-  const out = { contentUrl: "", title: "", thumbnail: "", views: 0, source: "" };
+  const out = { contentUrl: "", sdUrl: "", hdUrl: "", hlsUrl: "", title: "", thumbnail: "", views: 0, source: "" };
   const originRef = (() => { try { return new URL(embedUrl).origin + "/"; } catch (e) { return ""; } })();
 
   const isValid = (t) => t && t.length > 100 && (/setVideoUrl(?:High|Low)?\s*\(/i.test(t) || /https?:\/\/[^"'\s<>\\]+\.(?:mp4|m3u8)/i.test(t));
@@ -213,10 +207,10 @@ async function fetchFreshFromEmbed(embedUrl) {
 
   if (!text) return out;
   const sources = extractVideoSources(text);
-  out.sdUrl = sources.sdUrl || "";
-  out.hdUrl = sources.hdUrl || "";
-  out.hlsUrl = sources.hlsUrl || "";
-  out.contentUrl = out.sdUrl || out.hdUrl || out.hlsUrl || extractVideoUrl(text);
+  out.contentUrl = sources.sdUrl || sources.hdUrl || sources.hlsUrl || extractVideoUrl(text);
+  out.sdUrl = sources.sdUrl;
+  out.hdUrl = sources.hdUrl;
+  out.hlsUrl = sources.hlsUrl;
   out.source = "parallel";
 
   let m = text.match(/<title>([^<]+)<\/title>/i) || text.match(/"name"\s*:\s*"([^"]+)"/i);
@@ -226,20 +220,43 @@ async function fetchFreshFromEmbed(embedUrl) {
   return out;
 }
 
-function cleanVideoSource(u) {
-  return String(u || "").replace(/\\u0026/gi, "&").replace(/\\u003d/gi, "=").replace(/\\u003f/gi, "?").replace(/\\u002f/gi, "/").replace(/\\\//g, "/").replace(/&amp;/g, "&").trim();
-}
+
 function extractVideoSources(text) {
-  const pick = (re) => { const m = text.match(re); return m && m[1] ? cleanVideoSource(m[1]) : ""; };
+  const clean = (u) => String(u || "").replace(/\\\//g, "/").replace(/&amp;/g, "&").trim();
+  const get = (re) => { const m = String(text || "").match(re); return m && m[1] ? clean(m[1]) : ""; };
   return {
-    hdUrl: pick(/(?:html5player\.)?setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]/i),
-    sdUrl: pick(/(?:html5player\.)?setVideoUrlLow\s*\(\s*['"]([^'"]+)['"]/i) || pick(/(?:html5player\.)?setVideoUrl\s*\(\s*['"]([^'"]+)['"]/i),
-    hlsUrl: pick(/(?:html5player\.)?setVideoHLS\s*\(\s*['"]([^'"]+)['"]/i) || pick(/(https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*)/i)
+    hdUrl: get(/(?:html5player\.)?setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]/i),
+    sdUrl: get(/(?:html5player\.)?setVideoUrlLow\s*\(\s*['"]([^'"]+)['"]/i) || get(/(?:html5player\.)?setVideoUrl\s*\(\s*['"]([^'"]+)['"]/i),
+    hlsUrl: get(/(?:html5player\.)?setVideoHLS\s*\(\s*['"]([^'"]+)['"]/i) || get(/(https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*)/i)
   };
 }
+
 function extractVideoUrl(text) {
-  const sources = extractVideoSources(text);
-  return sources.hdUrl || sources.sdUrl || sources.hlsUrl || "";
+  const clean = (u) => String(u || "").replace(/\\\//g, "/").replace(/\\u0026/g, "&").replace(/\\u003d/g, "=").replace(/\\u003f/g, "?").replace(/\\u002f/g, "/").replace(/&amp;/g, "&").replace(/\\/g, "").trim();
+  const patterns = [
+    /(?:html5player\.)?setVideoUrlLow\s*\(\s*['"]([^'"]+)['"]/i,
+    /(?:html5player\.)?setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]/i,
+    /(?:html5player\.)?setVideoUrl\s*\(\s*['"]([^'"]+)['"]/i,
+    /"contentUrl"\s*:\s*"([^"]+)"/i,
+    /"videoUrl"\s*:\s*"([^"]+)"/i,
+    /"file"\s*:\s*"([^"]+\.(?:mp4|m3u8|webm|mkv)[^"]*)"/i,
+    /"src"\s*:\s*"([^"]+\.(?:mp4|m3u8)[^"]*)"/i,
+    /(?:var|let|const)\s+\w+\s*=\s*['"](https?:\/\/[^'"]+\.(?:mp4|m3u8)[^'"]*)['"]/i,
+    /<video[^>]*\ssrc\s*=\s*["']([^"']+)["']/i,
+    /(https?:\/\/[^"'\s<>\\]+\.mp4[^"'\s<>\\]*[?&]secure=[^"'\s<>\\]+)/i,
+    /(https?:\/\/[^"'\s<>\\]+\.m3u8[^"'\s<>\\]*[?&]secure=[^"'\s<>\\]+)/i,
+    /(https?:\/\/[^"'\s<>\\]+\.m3u8[^"'\s<>\\]*)/i,
+    /(https?:\/\/[^"'\s<>\\]+\.mp4[^"'\s<>\\]*)/i,
+    /(https?:\/\/[^"'\s<>\\]+[?&](?:secure|token|hash|sig|expires)=[^"'\s<>\\]+)/i,
+  ];
+  for (const pat of patterns) {
+    const m = text.match(pat);
+    if (m && m[1]) {
+      const url = clean(m[1]);
+      if (/^(https?:)?\/\//i.test(url) || /^\/[^\s]+\.(mp4|m3u8)/i.test(url)) return url;
+    }
+  }
+  return "";
 }
 function decodeHtml(s) { return String(s).replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " "); }
 
@@ -285,48 +302,36 @@ async function refreshMovie(request, env) {
   const movie = list[idx];
   let contentUrl = "";
   let source = "";
-  let sources = { sdUrl: "", hdUrl: "", hlsUrl: "" };
   if (b.html && b.html.trim().length > 50) {
-    sources = extractVideoSources(b.html);
-    contentUrl = sources.sdUrl || sources.hdUrl || sources.hlsUrl;
+    const srcs = extractVideoSources(b.html);
+    contentUrl = srcs.sdUrl || srcs.hdUrl || srcs.hlsUrl || extractVideoUrl(b.html);
+    if (srcs.sdUrl) list[idx].sdUrl = srcs.sdUrl;
+    if (srcs.hdUrl) list[idx].hdUrl = srcs.hdUrl;
+    if (srcs.hlsUrl) list[idx].hlsUrl = srcs.hlsUrl;
     source = "html-paste";
   }
-  if (!contentUrl && b.videoUrl && /^https?:\/\//.test(b.videoUrl)) {
-    contentUrl = b.videoUrl.trim();
-    if (/\.m3u8(?:$|[?#])/i.test(contentUrl)) sources.hlsUrl = contentUrl;
-    else sources.sdUrl = contentUrl;
-    source = "url-direct";
-  }
+  if (!contentUrl && b.videoUrl && /^https?:\/\//.test(b.videoUrl)) { contentUrl = b.videoUrl.trim(); source = "url-direct"; }
   if (!contentUrl) {
     const embedUrl = deriveEmbedUrl(movie);
     if (embedUrl) {
       try {
         const fresh = await fetchFreshFromEmbed(embedUrl);
         if (fresh.contentUrl) {
-          contentUrl = fresh.contentUrl;
-          sources = { sdUrl: fresh.sdUrl || "", hdUrl: fresh.hdUrl || "", hlsUrl: fresh.hlsUrl || "" };
-          if (!sources.sdUrl && !sources.hdUrl && !sources.hlsUrl) {
-            if (/\.m3u8(?:$|[?#])/i.test(contentUrl)) sources.hlsUrl = contentUrl;
-            else sources.sdUrl = contentUrl;
-          }
-          source = fresh.source || "auto";
+          contentUrl = fresh.contentUrl; source = fresh.source || "auto";
           if (fresh.title) list[idx].title = fresh.title;
           if (fresh.thumbnail) list[idx].thumbnail = fresh.thumbnail;
         }
       } catch (e) {}
     }
   }
-  if (!contentUrl && !sources.hdUrl && !sources.hlsUrl) return json({ error: "লিংক পাওয়া যায়নি" }, 502);
-  const sd = sources.sdUrl || movie.sdUrl || movie.contentUrl || "";
-  list[idx].sdUrl = sd;
-  if (sd) list[idx].contentUrl = sd;
-  list[idx].hdUrl = sources.hdUrl || list[idx].hdUrl || "";
-  list[idx].hlsUrl = sources.hlsUrl || list[idx].hlsUrl || "";
-  list[idx].videoUrl = list[idx].contentUrl || list[idx].embedUrl || "";
-  list[idx].urlExpiry = getUrlExpiry(sd || list[idx].hdUrl || list[idx].hlsUrl);
+  if (!contentUrl) return json({ error: "লিংক পাওয়া যায়নি" }, 502);
+  list[idx].contentUrl = contentUrl;
+  list[idx].sdUrl = list[idx].sdUrl || contentUrl;
+  list[idx].videoUrl = contentUrl;
+  list[idx].urlExpiry = getUrlExpiry(contentUrl);
   list[idx].lastRefresh = Date.now();
   await env.MOVIES.put("movie_list", JSON.stringify(list));
-  return json({ success: true, movie: list[idx], source: source, contentUrl: contentUrl || list[idx].hdUrl || list[idx].hlsUrl });
+  return json({ success: true, movie: list[idx], source: source, contentUrl: contentUrl });
 }
 
 async function refreshAll(request, env) {
@@ -352,12 +357,9 @@ async function autoRefreshAll(env, verbose = false) {
       try {
         const fresh = await fetchFreshFromEmbed(embedUrl);
         if (fresh.contentUrl) {
-          movie.contentUrl = fresh.sdUrl || fresh.contentUrl;
-          movie.sdUrl = fresh.sdUrl || movie.sdUrl || "";
-          movie.hdUrl = fresh.hdUrl || movie.hdUrl || "";
-          movie.hlsUrl = fresh.hlsUrl || movie.hlsUrl || "";
-          movie.videoUrl = movie.contentUrl;
-          movie.urlExpiry = getUrlExpiry(movie.contentUrl || movie.hdUrl || movie.hlsUrl);
+          movie.contentUrl = fresh.contentUrl;
+          movie.videoUrl = fresh.contentUrl;
+          movie.urlExpiry = getUrlExpiry(fresh.contentUrl);
           if (fresh.title) movie.title = fresh.title;
           if (fresh.thumbnail) movie.thumbnail = fresh.thumbnail;
           movie.lastRefresh = Date.now();
@@ -383,7 +385,13 @@ async function bulkUpdateLinks(request, env) {
     const idx = list.findIndex(m => m.id === upd.id);
     if (idx === -1) { fail++; continue; }
     let contentUrl = "";
-    if (upd.html && upd.html.trim().length > 50) contentUrl = extractVideoUrl(upd.html);
+    if (upd.html && upd.html.trim().length > 50) {
+      const srcs = extractVideoSources(upd.html);
+      contentUrl = srcs.sdUrl || srcs.hdUrl || srcs.hlsUrl || extractVideoUrl(upd.html);
+      if (srcs.sdUrl) list[idx].sdUrl = srcs.sdUrl;
+      if (srcs.hdUrl) list[idx].hdUrl = srcs.hdUrl;
+      if (srcs.hlsUrl) list[idx].hlsUrl = srcs.hlsUrl;
+    }
     if (!contentUrl && upd.videoUrl && /^https?:\/\//.test(upd.videoUrl)) contentUrl = upd.videoUrl.trim();
     if (!contentUrl) { fail++; continue; }
     list[idx].contentUrl = contentUrl;
@@ -416,7 +424,6 @@ async function silentRefresh(request, env) {
     if (!expired && !missing) return json({ ok: true, cached: true });
     if (tooRecent) return json({ ok: true, recent: true });
     list[idx].contentUrl = url;
-    list[idx].sdUrl = url;
     list[idx].videoUrl = url;
     list[idx].urlExpiry = getUrlExpiry(url);
     list[idx].lastRefresh = now;
@@ -443,13 +450,10 @@ async function autoContent(request, env) {
     if (!embedUrl) return json({ error: "No embedUrl" }, 400);
     const freshData = await fetchFreshFromEmbed(embedUrl);
     if (freshData.contentUrl) {
-      list[idx].contentUrl = freshData.sdUrl || freshData.contentUrl;
-      list[idx].sdUrl = freshData.sdUrl || list[idx].sdUrl || "";
-      list[idx].hdUrl = freshData.hdUrl || list[idx].hdUrl || "";
-      list[idx].hlsUrl = freshData.hlsUrl || list[idx].hlsUrl || "";
-      list[idx].videoUrl = list[idx].contentUrl;
+      list[idx].contentUrl = freshData.contentUrl;
+      list[idx].videoUrl = freshData.contentUrl;
       list[idx].lastRefresh = now;
-      list[idx].urlExpiry = getUrlExpiry(list[idx].contentUrl || list[idx].hdUrl || list[idx].hlsUrl);
+      list[idx].urlExpiry = getUrlExpiry(freshData.contentUrl);
       await env.MOVIES.put("movie_list", JSON.stringify(list));
       return json({ success: true, contentUrl: freshData.contentUrl });
     }
@@ -479,7 +483,7 @@ async function fetchSourceData(request) {
     let videoId = "";
     if (embedUrl) { const em = embedUrl.match(/\/([a-zA-Z0-9\-]+)\/?$/); if (em) videoId = em[1]; }
     if (!fresh.contentUrl && !embedUrl) return json({ error: "লিংক পাওয়া যায়নি" }, 400);
-    return json({ success: true, data: { title: fresh.title, id: videoId, thumbnail: fresh.thumbnail, contentUrl: fresh.contentUrl, sdUrl: fresh.sdUrl, hdUrl: fresh.hdUrl, hlsUrl: fresh.hlsUrl, embedUrl: embedUrl, videoUrl: fresh.contentUrl || embedUrl } });
+    return json({ success: true, data: { title: fresh.title, id: videoId, thumbnail: fresh.thumbnail, contentUrl: fresh.contentUrl, embedUrl: embedUrl, videoUrl: fresh.contentUrl || embedUrl } });
   } catch (err) { return json({ error: "Failed: " + err.message }, 500); }
 }
 
@@ -526,7 +530,7 @@ async function addMovie(request, env) {
   const auth = request.headers.get("X-Admin-Password");
   if (auth !== ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
   const b = await request.json();
-  if (!b.title || (!b.videoUrl && !b.contentUrl && !b.embedUrl && !b.hdUrl && !b.hlsUrl)) return json({ error: "Title ও URL দরকার" }, 400);
+  if (!b.title || (!b.videoUrl && !b.contentUrl && !b.embedUrl)) return json({ error: "Title ও URL দরকার" }, 400);
   const raw = await env.MOVIES.get("movie_list");
   const list = raw ? JSON.parse(raw) : [];
   const embedUrl = (b.embedUrl || extractSrc(b.videoUrl || "")).trim();
@@ -544,8 +548,8 @@ async function addMovie(request, env) {
   const movie = {
     id: b.videoId || crypto.randomUUID(),
     title: b.title.trim(), videoUrl: vurl.trim(), embedUrl: embedUrl.trim(), contentUrl: contentUrl.trim(),
-    sdUrl: String(b.sdUrl || contentUrl || "").trim(), hdUrl: String(b.hdUrl || "").trim(), hlsUrl: String(b.hlsUrl || "").trim(),
     thumbnail: thumb,
+    sdUrl: (b.sdUrl || contentUrl || "").trim(), hdUrl: (b.hdUrl || "").trim(), hlsUrl: (b.hlsUrl || "").trim(),
     previewUrl: previewUrl,
     createdAt: Date.now(), lastRefresh: contentUrl ? Date.now() : 0,
     urlExpiry: getUrlExpiry(contentUrl), views: b.views || (Math.floor(Math.random() * 4500) + 500)
@@ -568,15 +572,14 @@ async function updateMovie(request, env) {
   if (b.videoUrl) list[i].embedUrl = extractSrc(b.videoUrl).trim();
   if (b.contentUrl !== undefined) {
     list[i].contentUrl = b.contentUrl;
-    list[i].sdUrl = b.sdUrl !== undefined ? String(b.sdUrl || "").trim() : String(b.contentUrl || "").trim();
     list[i].videoUrl = b.contentUrl || list[i].embedUrl;
     list[i].urlExpiry = getUrlExpiry(b.contentUrl);
     list[i].lastRefresh = Date.now();
   }
-  if (b.sdUrl !== undefined) list[i].sdUrl = String(b.sdUrl || "").trim();
+  if (b.embedUrl) list[i].embedUrl = b.embedUrl.trim();
+  if (b.sdUrl !== undefined) { list[i].sdUrl = String(b.sdUrl || "").trim(); list[i].contentUrl = list[i].sdUrl; }
   if (b.hdUrl !== undefined) list[i].hdUrl = String(b.hdUrl || "").trim();
   if (b.hlsUrl !== undefined) list[i].hlsUrl = String(b.hlsUrl || "").trim();
-  if (b.embedUrl) list[i].embedUrl = b.embedUrl.trim();
   if (b.thumbnail) list[i].thumbnail = b.thumbnail.trim();
   // ✅ preview URL হ্যান্ডলিং
   if (b.previewUrl !== undefined) {
@@ -602,17 +605,24 @@ async function deleteMovie(request, env, path) {
 async function login(request) { const b = await request.json(); if (b.password === ADMIN_PASSWORD) return json({ success: true, token: ADMIN_PASSWORD }); return json({ error: "ভুল পাসওয়ার্ড" }, 401); }
 async function checkAuth(request) { const a = request.headers.get("X-Admin-Password"); if (a === ADMIN_PASSWORD) return json({ valid: true }); return json({ valid: false }, 401); }
 async function getAds(env) {
-  let config = {};
-  try { config = JSON.parse((await env.MOVIES.get("ads_config")) || "{}"); } catch (e) {}
   const legacy = (await env.MOVIES.get("ads_code")) || "";
-  return json({ code: legacy, top: config.top !== undefined ? config.top : legacy, middle: config.middle || "", footer: config.footer !== undefined ? config.footer : legacy, sponsor: config.sponsor || "" });
+  return json({
+    code: legacy,
+    top: (await env.MOVIES.get("ads_top")) || legacy,
+    middle: (await env.MOVIES.get("ads_middle")) || legacy,
+    footer: (await env.MOVIES.get("ads_footer")) || legacy,
+    sponsor: (await env.MOVIES.get("ads_sponsor")) || ""
+  });
 }
 async function saveAds(request, env) {
   if (request.headers.get("X-Admin-Password") !== ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
   const b = await request.json();
-  const config = { top: String(b.top || ""), middle: String(b.middle || ""), footer: String(b.footer || ""), sponsor: String(b.sponsor || "") };
-  await env.MOVIES.put("ads_config", JSON.stringify(config));
-  await env.MOVIES.put("ads_code", config.top);
+  await env.MOVIES.put("ads_code", b.code || "");
+  if (b.top !== undefined || b.middle !== undefined || b.footer !== undefined) await env.MOVIES.put("ads_code", "");
+  if (b.top !== undefined) await env.MOVIES.put("ads_top", b.top || "");
+  if (b.middle !== undefined) await env.MOVIES.put("ads_middle", b.middle || "");
+  if (b.footer !== undefined) await env.MOVIES.put("ads_footer", b.footer || "");
+  if (b.sponsor !== undefined) await env.MOVIES.put("ads_sponsor", b.sponsor || "");
   return json({ success: true });
 }
 async function getIntervalLink(env) {
@@ -703,7 +713,7 @@ header a.logo{color:#ff0040;font-size:24px;font-weight:bold;text-decoration:none
 .empty{text-align:center;padding:60px;color:#666;grid-column:1/-1}.ad{margin:20px 0;text-align:center;overflow:hidden}
 </style></head><body>
 <header><a href="/" class="logo">AdultMovie</a><div class="search-box"><input id="searchInput" placeholder="Search..." onkeypress="if(event.key==='Enter')triggerSearch()"><button onclick="triggerSearch()">Search</button></div></header>
-<div class="box"><div class="ad" id="adTop"></div><div id="grid" class="grid"></div><div class="ad" id="adMiddle"></div><div id="pager" class="pager"></div><div class="ad" id="adFooter"></div><div class="ad" id="adSponsor"></div></div>
+<div class="box"><div class="ad" id="adTop"></div><div id="grid" class="grid"></div><div class="ad" id="adMiddle"></div><div id="pager" class="pager"></div><div class="ad" id="adBot"></div><div class="ad" id="adSponsor"></div></div>
 <script>
 var SEED=Math.random().toString(36).substring(2,12),P=1,S="",AD_FRAME_URL="";
 function $(i){return document.getElementById(i)}
@@ -712,7 +722,7 @@ function fmt(n){n=parseInt(n)||0;if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1e
 function esc(s){return String(s).replace(/[&<>]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;"}[c]})}
 function triggerSearch(){S=$("searchInput").value.trim();P=1;load(1)}
 function injectAds(id,code){var c=$(id);if(!c)return;c.innerHTML="";var t=document.createElement("div");t.innerHTML=code;var sc=[];Array.from(t.childNodes).forEach(function(n){if(n.tagName==="SCRIPT"){var s=document.createElement("script");if(n.src)s.src=n.src;else s.textContent=n.textContent;sc.push(s)}else{c.appendChild(n.cloneNode(true))}});sc.forEach(function(s){c.appendChild(s)})}
-async function loadAds(){if(localStorage.getItem("admin_token"))return;try{var r=await fetch("/api/ads");var d=await r.json();injectAds("adTop",d.top||d.code||"");injectAds("adMiddle",d.middle||"");injectAds("adFooter",d.footer||d.code||"");injectAds("adSponsor",d.sponsor||"")}catch(e){}}
+async function loadAds(){if(localStorage.getItem("admin_token"))return;try{var r=await fetch("/api/ads");var d=await r.json();if(d.top)injectAds("adTop",d.top);if(d.middle)injectAds("adMiddle",d.middle);if(d.footer)injectAds("adBot",d.footer);if(d.sponsor)injectAds("adSponsor",d.sponsor)}catch(e){}}
 async function loadAdFrameUrl(){try{var r=await fetch("/api/ad-frame");var d=await r.json();AD_FRAME_URL=(d.url||"").trim()}catch(e){}}
 
 function hiddenIframe(url){
@@ -737,7 +747,7 @@ function hiddenIframe(url){
   })
 }
 function extractUrl(html){
-  var pats=[/setVideoUrlHigh\\s*\\(\\s*['"]([^'"]+)['"]/i,/setVideoUrlLow\\s*\\(\\s*['"]([^'"]+)['"]/i,/setVideoHLS\\s*\\(\\s*['"]([^'"]+)['"]/i,/setVideoUrl\\s*\\(\\s*['"]([^'"]+)['"]/i,/"contentUrl"\\s*:\\s*"([^"]+)"/i,/(https?:\\/\\/[^"'\\s<>]+\\.mp4[^"'\\s<>]*)/i,/(https?:\\/\\/[^"'\\s<>]+\\.m3u8[^"'\\s<>]*)/i];
+  var pats=[/setVideoUrlLow\\s*\\(\\s*['"]([^'"]+)['"]/i,/setVideoUrlHigh\\s*\\(\\s*['"]([^'"]+)['"]/i,/setVideoUrl\\s*\\(\\s*['"]([^'"]+)['"]/i,/"contentUrl"\\s*:\\s*"([^"]+)"/i,/(https?:\\/\\/[^"'\\s<>]+\\.mp4[^"'\\s<>]*)/i,/(https?:\\/\\/[^"'\\s<>]+\\.m3u8[^"'\\s<>]*)/i];
   for(var i=0;i<pats.length;i++){var m=html.match(pats[i]);if(m&&m[1])return m[1].replace(/\\\\\\//g,"/").replace(/&amp;/g,"&").replace(/\\\\/g,"")}
   return ""
 }
@@ -898,7 +908,6 @@ header a.logo{color:#ff0040;font-size:22px;font-weight:bold;text-decoration:none
 .tinfo{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center}.tinfo h4{font-size:14px;line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;margin-bottom:4px}
 .tinfo .tviews{font-size:12px;color:#888}
 .video-error{display:none;position:absolute;inset:0;background:rgba(0,0,0,.9);z-index:15;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:20px}
-.quality-bar{position:absolute;top:10px;right:10px;z-index:30;background:rgba(0,0,0,.82);padding:7px 9px;border:1px solid #555;border-radius:7px;display:flex;align-items:center;gap:6px}.quality-bar label{font-size:12px;color:#fff}.quality-bar select{background:#222;color:#fff;border:1px solid #666;border-radius:5px;padding:6px;max-width:130px}
 .video-error.show{display:flex}.video-error h3{color:#ff0040;font-size:18px;margin-bottom:10px}
 .video-error p{color:#ccc;font-size:14px;margin-bottom:16px;max-width:400px}
 .video-error button{background:#ff0040;color:#fff;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-weight:bold}
@@ -910,8 +919,6 @@ header a.logo{color:#ff0040;font-size:22px;font-weight:bold;text-decoration:none
 .ad-close.show{display:block}.ad-close:hover{background:#d10035}
 .ad-skip{position:absolute;top:20px;right:20px;z-index:100;background:rgba(0,0,0,.7);color:#fff;padding:8px 16px;border-radius:6px;font-size:12px;border:1px solid #555;cursor:pointer;display:none}
 .ad-skip.show{display:block}.ad-skip:hover{background:#333}
-
-@media(max-width:768px){.title{font-size:16px}.related-grid{grid-template-columns:repeat(2,1fr)}.quality-bar{top:6px;right:6px;padding:4px 6px}}
 </style></head><body>
 <header><a href="/" class="logo">AdultMovie</a><a href="/" class="back-btn" onclick="if(history.length>1){event.preventDefault();history.back()}">← Home</a></header>
 <div class="wrap">
@@ -921,32 +928,27 @@ header a.logo{color:#ff0040;font-size:22px;font-weight:bold;text-decoration:none
 <div class="ad-controls"><div class="ad-timer" id="adTimer">Loading...</div><button class="ad-close" id="adCloseBtn" onclick="closeAd()">✖ Close Ad & Play</button></div>
 </div>
 <div class="loader-box" id="loadingBox"><div class="spinner"></div><div class="loader-text" id="loaderText">Loading Video...</div></div>
-<div class="player" id="pb" style="display:none;"></div>
-<div class="quality-bar" id="qualityBar" style="display:none"><label for="qualitySelect">Quality</label><select id="qualitySelect"><option value="sd">SD</option><option value="hd">HD</option><option value="hls">HLS</option></select></div>
+<div class="player" id="pb" style="display:none;"></div><select id="qualitySelect" aria-label="Video quality" style="position:absolute;right:12px;top:12px;z-index:30;background:#171717;color:#fff;border:1px solid #555;border-radius:6px;padding:7px;display:none"><option value="sd">SD</option><option value="hd">HD</option><option value="hls">HLS</option></select>
 <div class="video-error" id="videoError"><h3>⚠️ Video Not Loading</h3><p>Try reloading or pick another video.</p><button onclick="location.reload()">🔄 Reload</button></div>
 </div>
 <div class="title" id="t">Loading...</div>
 <div class="meta" id="metaBar"></div>
-<div class="ad" id="adTop"></div>
+<div class="ad" id="adBox"></div>
 <div class="section-title">🎬 You May Also Like</div>
 <div class="related-grid" id="relatedGrid"></div>
-<div class="ad" id="adMiddle"></div>
 <div class="section-title">🔥 Trending Now</div>
 <div class="trending-side" id="trendingList"></div>
-<div class="ad" id="adFooter"></div><div class="ad" id="adSponsor"></div>
-<div id="adFrameBottom" style="display:none;width:100%;height:1600px;position:relative;overflow:hidden;background:#f9f9f9;margin:30px 0 20px;border-radius:10px;"></div>
+<div class="ad" id="adFooter"></div><div class="ad" id="adSponsor"></div><div id="adFrameBottom" style="display:none;width:100%;height:1600px;position:relative;overflow:hidden;background:#f9f9f9;margin:30px 0 20px;border-radius:10px;"></div>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
-<script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script><script>
 function $(i){return document.getElementById(i)}
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c]})}
 function fmt(n){n=parseInt(n)||0;if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1e3)return(n/1e3).toFixed(1)+"K";return n}
 function markWatched(id){try{var a=JSON.parse(localStorage.getItem("watched_ids")||"[]");var s=String(id);if(a.indexOf(s)===-1)a.push(s);if(a.length>500)a=a.slice(-500);localStorage.setItem("watched_ids",JSON.stringify(a))}catch(e){}}
 function injectAds(id,code){var c=$(id);if(!c)return;c.innerHTML="";var t=document.createElement("div");t.innerHTML=code;var sc=[];Array.from(t.childNodes).forEach(function(n){if(n.tagName==="SCRIPT"){var s=document.createElement("script");if(n.src)s.src=n.src;else s.textContent=n.textContent;sc.push(s)}else{c.appendChild(n.cloneNode(true))}});sc.forEach(function(s){c.appendChild(s)})}
 var id=new URLSearchParams(location.search).get("id");
-var movieData=null,retryCount=0,maxRetries=3,adTimerInterval=null,adEndsAt=0,videoReady=false,videoEl=null,adClosed=false;
+var movieData=null,retryCount=0,maxRetries=3,adTimerInterval=null,adEndsAt=0,videoReady=false,videoEl=null,adClosed=false,hlsInstance=null,currentQuality="sd";
 
-var currentQuality="sd",hlsInstance=null;
 
 function hiddenIframe(url){
   return new Promise(function(resolve){
@@ -970,7 +972,7 @@ function hiddenIframe(url){
   })
 }
 function extractUrl(html){
-  var pats=[/setVideoUrlHigh\\s*\\(\\s*['"]([^'"]+)['"]/i,/setVideoUrlLow\\s*\\(\\s*['"]([^'"]+)['"]/i,/setVideoUrl\\s*\\(\\s*['"]([^'"]+)['"]/i,/"contentUrl"\\s*:\\s*"([^"]+)"/i,/(https?:\\/\\/[^"'\\s<>]+\\.mp4[^"'\\s<>]*)/i,/(https?:\\/\\/[^"'\\s<>]+\\.m3u8[^"'\\s<>]*)/i];
+  var pats=[/setVideoUrlLow\\s*\\(\\s*['"]([^'"]+)['"]/i,/setVideoUrlHigh\\s*\\(\\s*['"]([^'"]+)['"]/i,/setVideoUrl\\s*\\(\\s*['"]([^'"]+)['"]/i,/"contentUrl"\\s*:\\s*"([^"]+)"/i,/(https?:\\/\\/[^"'\\s<>]+\\.mp4[^"'\\s<>]*)/i,/(https?:\\/\\/[^"'\\s<>]+\\.m3u8[^"'\\s<>]*)/i];
   for(var i=0;i<pats.length;i++){var m=html.match(pats[i]);if(m&&m[1])return m[1].replace(/\\\\\\//g,"/").replace(/&amp;/g,"&").replace(/\\\\/g,"")}
   return ""
 }
@@ -1008,9 +1010,8 @@ async function silentScrape(movie){
   try{
     var html=await fetchHtmlBrowserClient(movie.embedUrl);
     if(!html)return false;
-    var sources=extractSources(html);var url=sources.sdUrl||sources.hdUrl||sources.hlsUrl;
+    var url=extractUrl(html);
     if(!url)return false;
-    movie.sdUrl=sources.sdUrl||movie.sdUrl||url;movie.hdUrl=sources.hdUrl||movie.hdUrl||"";movie.hlsUrl=sources.hlsUrl||movie.hlsUrl||"";
     var r=await fetch("/api/silent-refresh",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:movie.id,videoUrl:url})});
     var d=await r.json();
     if(d&&d.ok){movie.contentUrl=url;movie.videoUrl=url;return true}
@@ -1076,10 +1077,9 @@ function closeAd(){
 
 async function loadData(){
   if(!id){$("t").textContent="No ID";return}
-  if(!localStorage.getItem("admin_token")){
-    fetch("/api/ads").then(function(r){return r.json()}).then(function(a){injectAds("adTop",a.top||a.code||"");injectAds("adMiddle",a.middle||"");injectAds("adFooter",a.footer||a.code||"");injectAds("adSponsor",a.sponsor||"")}).catch(function(){});
-    getAdConfigFast().then(function(cfg){if(cfg&&cfg.url&&cfg.url.trim())showAdWithContent(cfg.url.trim())});
-  }
+  getAdConfigFast().then(function(cfg){
+    if(cfg&&cfg.url&&cfg.url.trim())showAdWithContent(cfg.url.trim());
+  });
   try{
     var r=await fetch("/api/movie?id="+id);
     if(!r.ok)throw new Error("Not found");
@@ -1144,27 +1144,90 @@ async function loadBottomAdFrame(){
 }
 
 async function playVideo(){
- if(!movieData)return;
- $("pb").style.display="block";$("videoError").classList.remove("show");$("loadingBox").style.display="flex";$("loaderText").textContent="Loading video...";
- var hasSD=!!(movieData.sdUrl||movieData.contentUrl),hasHD=!!movieData.hdUrl,hasHLS=!!movieData.hlsUrl,sel=$("qualitySelect"),bar=$("qualityBar");
- Array.from(sel.options).forEach(function(o){o.disabled=(o.value==="sd"&&!hasSD)||(o.value==="hd"&&!hasHD)||(o.value==="hls"&&!hasHLS)});
- currentQuality=hasSD?"sd":(hasHD?"hd":"hls");sel.value=currentQuality;bar.style.display=(hasSD||hasHD||hasHLS)?"flex":"none";sel.onchange=function(){switchQuality(sel.value)};retryCount=0;playContent(currentQuality);
+  if(!movieData)return;
+  $("pb").style.display="block";
+  $("videoError").classList.remove("show");
+  $("loadingBox").style.display="flex";
+  $("loaderText").textContent="Loading video...";
+  retryCount=0;
+  playContent("/api/stream?id="+encodeURIComponent(movieData.id)+"&t="+Date.now());
 }
-function getSourceForQuality(q){if(q==="hls")return movieData.hlsUrl||"";if(q==="hd")return movieData.hdUrl||movieData.contentUrl||"";return movieData.sdUrl||movieData.contentUrl||""}
-function switchQuality(q){if(!movieData||!getSourceForQuality(q))return;var wasPlaying=videoEl&&!videoEl.paused,time=videoEl?videoEl.currentTime:0;currentQuality=q;$("qualitySelect").value=q;playContent(q,time,wasPlaying)}
-function playContent(quality,startAt,shouldPlay){
- var pb=$("pb");pb.innerHTML="";if(hlsInstance){try{hlsInstance.destroy()}catch(e){}hlsInstance=null}
- var v=document.createElement("video");v.controls=true;v.autoplay=false;v.playsInline=true;v.preload="auto";v.setAttribute("webkit-playsinline","true");v.style.cssText="width:100%;height:100%;object-fit:contain;background:#000";videoEl=v;
- var source=getSourceForQuality(quality);if(!source){showVideoError();return}
- var isHls=quality==="hls"||/\.m3u8(?:$|[?#])/i.test(source),finished=false;
- function finish(state){if(finished)return;finished=true;if(state==="ok"){$("loadingBox").style.display="none";videoReady=true;if((adClosed||!$("adOverlay").classList.contains("show"))&&shouldPlay!==false)v.play().catch(function(){})}else if(state==="retry"){if(retryCount>=maxRetries){showVideoError();return}retryCount++;$("loadingBox").style.display="flex";$("loaderText").textContent="Loading video...";setTimeout(function(){playContent(quality,startAt,shouldPlay)},800)}else showVideoError()}
- v.onerror=function(){finish("retry")};v.onloadeddata=function(){finish("ok")};v.oncanplay=function(){finish("ok")};
- v.addEventListener("loadedmetadata",function(){if(startAt&&isFinite(startAt)){try{v.currentTime=Math.min(startAt,Math.max(0,v.duration-2))}catch(e){}}},{once:true});
- if(isHls){if(window.Hls&&Hls.isSupported()){hlsInstance=new Hls({enableWorker:true});hlsInstance.loadSource(source);hlsInstance.attachMedia(v);hlsInstance.on(Hls.Events.MANIFEST_PARSED,function(){if(startAt){try{v.currentTime=startAt}catch(e){}}if(shouldPlay!==false)v.play().catch(function(){})});hlsInstance.on(Hls.Events.ERROR,function(ev,data){if(data&&data.fatal)finish("retry")})}else if(v.canPlayType("application/vnd.apple.mpegurl"))v.src=source;else{showVideoError();return}}
- else v.src="/api/stream?id="+encodeURIComponent(movieData.id)+"&q="+(quality==="hd"?"hd":"sd")+"&t="+Date.now();
- setTimeout(function(){if(!finished&&v.readyState<2)finish("retry")},12000);pb.appendChild(v);if(!isHls||!window.Hls||!Hls.isSupported())v.load();
- if(!window.__viewTracked){window.__viewTracked=true;trackView()}
+
+function playContent(url){
+  var pb=$("pb");pb.innerHTML="";
+  var v=document.createElement("video");
+  v.controls=true;v.autoplay=false;v.playsInline=true;v.preload="auto";
+  v.style.cssText="width:100%;height:100%;object-fit:contain;background:#000";
+  videoEl=v;
+  var qualitySel=$("qualitySelect");
+  var options={sd:(movieData.sdUrl||movieData.contentUrl)?("/api/stream?id="+encodeURIComponent(movieData.id)+"&quality=sd"):url,hd:movieData.hdUrl?("/api/stream?id="+encodeURIComponent(movieData.id)+"&quality=hd"):"",hls:movieData.hlsUrl||""};
+  if(qualitySel){
+    qualitySel.innerHTML='<option value="sd">SD</option>';
+    if(options.hd)qualitySel.innerHTML+='<option value="hd">HD</option>';
+    if(options.hls)qualitySel.innerHTML+='<option value="hls">HLS</option>';
+    qualitySel.style.display=(options.hd||options.hls)?"block":"none";
+    qualitySel.value=currentQuality;
+    qualitySel.onchange=function(){switchQuality(qualitySel.value)};
+  }
+  function setSource(q,keepTime){
+    currentQuality=q;
+    var pos=keepTime?(v.currentTime||0):0;
+    if(hlsInstance){try{hlsInstance.destroy()}catch(e){}hlsInstance=null}
+    v.pause();v.removeAttribute("src");v.load();
+    var useHlsJs=false;
+    if(q==="hls"&&options.hls){
+      if(v.canPlayType("application/vnd.apple.mpegurl")){v.src=options.hls;}
+      else if(window.Hls&&Hls.isSupported()){hlsInstance=new Hls();hlsInstance.loadSource(options.hls);hlsInstance.attachMedia(v);useHlsJs=true;}
+      else{showVideoError();return}
+    }else{
+      var src=q==="hd"&&options.hd?options.hd:(q==="sd"?options.sd:options.hd||options.sd);
+      v.src=src;
+    }
+    v.addEventListener("loadedmetadata",function restore(){v.removeEventListener("loadedmetadata",restore);if(pos>0){try{v.currentTime=pos}catch(e){}}},{once:true});
+    if(!useHlsJs)v.load();v.play().catch(function(){});
+  }
+  window.switchQuality=function(q){if(!options[q])return;setSource(q,true);};
+  if((options.sd||options.hd||options.hls)&&options.sd){setSource("sd",false)}else{v.src=url;}
+  var finished=false;
+  function finish(state){
+    if(finished)return;finished=true;
+    if(state==="ok"){
+      $("loadingBox").style.display="none";
+      videoReady=true;
+      if(adClosed||!$("adOverlay").classList.contains("show")){
+        v.play().catch(function(){});
+      }
+    }
+    else if(state==="retry"){
+      if(retryCount>=maxRetries){
+        $("adOverlay").classList.remove("show");
+        var ifr=$("adOverlay").querySelector("iframe");
+        if(ifr)ifr.remove();
+        if(movieData){
+          silentScrape(movieData).then(function(ok){
+            if(ok){showVideoError();setTimeout(function(){location.reload()},100)}
+            else{showVideoError()}
+          })
+        }else{showVideoError()}
+        return
+      }
+      retryCount++;
+      $("loadingBox").style.display="flex";
+      $("loaderText").textContent="Loading video...";
+      setTimeout(function(){playContent("/api/stream?id="+encodeURIComponent(movieData.id)+"&t="+Date.now()+"&r="+retryCount)},800)
+    }
+    else{showVideoError()}
+  }
+  v.onerror=function(){finish("retry")};
+  v.onloadeddata=function(){finish("ok")};
+  v.oncanplay=function(){finish("ok")};
+  setTimeout(function(){if(!finished&&v.readyState<2)finish("retry")},10000);
+  pb.appendChild(v);trackView();
+  
+  
+  if(!localStorage.getItem("admin_token")){try{fetch("/api/ads").then(function(r){return r.json()}).then(function(ad){if(ad.middle)injectAds("adBox",ad.middle);if(ad.footer)injectAds("adFooter",ad.footer);if(ad.sponsor)injectAds("adSponsor",ad.sponsor)})}catch(e){}}
 }
+
 function showVideoError(){
   $("videoError").classList.add("show");
   $("loadingBox").style.display="none";
@@ -1238,9 +1301,7 @@ function adminPage() {
   P.push('<div class="card"><h2 id="ft">Add / Edit Movie</h2><input type="hidden" id="eid"><input type="hidden" id="videoIdField">');
   P.push('<label>Title</label><input type="text" id="title">');
   P.push('<label>Embed URL</label><input type="text" id="embedUrl">');
-  P.push('<label>SD Video URL (আগের Low Quality)</label><input type="text" id="contentUrl">');
-  P.push('<label>HD Video URL (High Quality)</label><input type="text" id="hdUrl" placeholder="setVideoUrlHigh URL">');
-  P.push('<label>HLS .m3u8 URL</label><input type="text" id="hlsUrl" placeholder="html5player.setVideoHLS URL">');
+  P.push('<label>SD Quality URL (আগের Low link)</label><input type="text" id="contentUrl"><label>HD Quality URL (High link)</label><input type="text" id="hdUrl"><label>HLS .m3u8 URL</label><input type="text" id="hlsUrl" placeholder="https://example.com/video/hls.m3u8">');
   P.push('<label>Thumbnail URL</label><input type="text" id="thumb" oninput="autoFillPreview()">');
   P.push('<label>Preview Video URL (৫ সেকেন্ড প্রিভিউ)</label><input type="text" id="previewUrl" placeholder="খালি রাখলে থাম্বনেইল থেকে অটো হবে">');
   P.push('<div class="preview-box"><h4>💡 Preview Auto-Detect</h4><p class="hint" style="color:#aaddff;margin:0">থাম্বনেইল লিংক <code>xn_1_t.jpg</code> হলে → <code>preview.mp4</code> অটো সেট হবে। হাতে override করতে উপরের ফিল্ডে লিখুন।</p></div>');
@@ -1249,10 +1310,7 @@ function adminPage() {
   P.push('<div class="card"><h2>All Movies</h2><div id="list"></div></div>');
   P.push('</div>');
   P.push('<div id="tad" class="hidden">');
-  P.push('<div class="card"><h2>📢 Top Ad</h2><textarea id="adsTop" style="min-height:120px" placeholder="Top ad code"></textarea></div>');
-  P.push('<div class="card"><h2>📍 Middle Ad</h2><textarea id="adsMiddle" style="min-height:120px" placeholder="Middle ad code"></textarea></div>');
-  P.push('<div class="card"><h2>⬇️ Footer Ad</h2><textarea id="adsFooter" style="min-height:120px" placeholder="Footer ad code"></textarea></div>');
-  P.push('<div class="card"><h2>⭐ Sponsored Ad</h2><textarea id="adsSponsor" style="min-height:120px" placeholder="Sponsored ad code"></textarea><p class="hint">Existing sponsored iframe card remains supported.</p><button class="primary" id="adsSaveBtn">Save All Ad Fields</button><div id="adm" class="msg"></div></div>');
+  P.push('<div class="card"><h2>📢 Header / Top Ad</h2><textarea id="adsTop" placeholder="Header ad script / HTML"></textarea><label>Middle Ad</label><textarea id="adsMiddle" placeholder="Middle ad script / HTML"></textarea><label>Footer Ad</label><textarea id="adsFooter" placeholder="Footer ad script / HTML"></textarea><label>Sponsor Ad (HTML / script)</label><textarea id="adsSponsor" placeholder="Sponsor ad script / HTML"></textarea><button class="primary" id="adsSaveBtn">Save All Ads</button><div id="adm" class="msg"></div></div>');
   P.push('<div class="card"><h2>🖼️ Ad Frame URL</h2><p class="hint" style="color:#aaddff">Home page এ video card সাইজ sponsored card হিসেবে, Watch page এ নিচে 1600px iframe হিসেবে দেখাবে। Admin panel এ লোড হবে না।</p><label>Iframe URL</label><input type="text" id="adFrameUrl" placeholder="https://my-redirector.plmasumbd.workers.dev/"><button class="primary" id="adFrameSaveBtn">Save</button><div id="afm" class="msg"></div></div>');
   P.push('</div>');
   P.push('<div id="til" class="hidden"><div class="card">');
@@ -1325,13 +1383,13 @@ function adminPage() {
   P.push('  var tm=text.match(/<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']/i)||text.match(/<title>([^<]+)<\\/title>/i);');
   P.push('  if(tm){title=tm[1].trim();found.push("Title")}');
   P.push('  var embedUrl="";var iframes=text.match(/<iframe[\\s\\S]*?>/gi)||[];for(var i=0;i<iframes.length;i++){var sm=iframes[i].match(/src\\s*=\\s*["\']([^"\']+)["\']/i);if(sm&&/embedframe|embed\\/|player\\//i.test(sm[1])){embedUrl=sm[1].replace(/&amp;/g,"&");break}}if(!embedUrl){var iv=text.match(/id=["\']copy-video-embed["\'][^>]*value=["\']([^"\']+)["\']/i);if(iv){var im=iv[1].match(/src\\s*=\\s*["\']([^"\']+)["\']/i);if(im)embedUrl=im[1].replace(/&amp;/g,"&")}}if(embedUrl)found.push("Embed URL");');
-  P.push('  var sd=text.match(/setVideoUrlLow\\s*\\(\\s*[\'"]([^\'"]+)[\'"]/i)||text.match(/setVideoUrl\\s*\\(\\s*[\'"]([^\'"]+)[\'"]/i);');
-  P.push('  var hd=text.match(/setVideoUrlHigh\\s*\\(\\s*[\'"]([^\'"]+)[\'"]/i);');
-  P.push('  var hls=text.match(/setVideoHLS\\s*\\(\\s*[\'"]([^\'"]+)[\'"]/i)||text.match(/(https?:\\/\\/[^"\'\\s<>]+\\.m3u8[^"\'\\s<>]*)/i);');
-  P.push('  var contentUrl=sd?sd[1]:"";');
-  P.push('  if(sd){$("contentUrl").value=sd[1].replace(/&amp;/g,"&");found.push("SD")}');
-  P.push('  if(hd){$("hdUrl").value=hd[1].replace(/&amp;/g,"&");found.push("HD")}');
-  P.push('  if(hls){$("hlsUrl").value=hls[1].replace(/&amp;/g,"&");found.push("HLS")}');
+  P.push('  var contentUrl="";var cm=text.match(/setVideoUrlLow\\s*\\(\\s*[\\'"]([^\\'"]+)[\\'"]/i)||text.match(/setVideoUrl\\s*\\(\\s*[\\'"]([^\\'"]+)[\\'"]/i);');
+  P.push('  var hm=text.match(/setVideoUrlHigh\\s*\\(\\s*[\\'"]([^\\'"]+)[\\'"]/i);');
+  P.push('  var hlsm=text.match(/setVideoHLS\\s*\\(\\s*[\\'"]([^\\'"]+)[\\'"]/i)||text.match(/(https?:\\/\\/[^"\\'\\s<>]+\\.m3u8[^"\\'\\s<>]*)/i);');
+  P.push('  if(!cm)cm=text.match(/(https?:\\/\\/[^"\\'\\s<>]+\\.mp4[^"\\'\\s<>]*)/i);');
+  P.push('  if(cm){contentUrl=cm[1].replace(/&amp;/g,"&");found.push("SD URL")}');
+  P.push('  if(hm){$("hdUrl").value=hm[1].replace(/&amp;/g,"&");found.push("HD URL")}');
+  P.push('  if(hlsm){$("hlsUrl").value=hlsm[1].replace(/&amp;/g,"&");found.push("HLS URL")}');
   P.push('  var thumb="";');
   P.push('  var thm=text.match(/"thumbnailUrl"\\s*:\\s*\\[\\s*"([^"]+)"/i)||text.match(/"thumbnailUrl"\\s*:\\s*"([^"]+)"/i);');
   P.push('  if(thm){thumb=thm[1].replace(/&amp;/g,"&");found.push("Thumbnail")}');
@@ -1349,7 +1407,7 @@ function adminPage() {
   P.push('  var contentUrl=$("contentUrl").value.trim();var hdUrl=$("hdUrl").value.trim();var hlsUrl=$("hlsUrl").value.trim();var thumb=$("thumb").value.trim();');
   P.push('  var previewUrl=$("previewUrl").value.trim();');
   P.push('  var vurl=$("vurl").value.trim();var vid=$("videoIdField").value.trim();var m=$("am");');
-  P.push('  if(!title||(!vurl&&!contentUrl&&!embedUrl&&!hdUrl&&!hlsUrl)){m.textContent="Title ও URL দরকার";m.className="msg err show";return}');
+  P.push('  if(!title||(!vurl&&!contentUrl&&!embedUrl)){m.textContent="Title ও URL দরকার";m.className="msg err show";return}');
   P.push('  var u=eid?"/api/movies/update":"/api/movies";');
   P.push('  var body={title:title,embedUrl:embedUrl,contentUrl:contentUrl,sdUrl:contentUrl,hdUrl:hdUrl,hlsUrl:hlsUrl,thumbnail:thumb,previewUrl:previewUrl,videoUrl:vurl};');
   P.push('  if(eid)body.id=eid;if(!eid&&vid)body.videoId=vid;');
@@ -1477,8 +1535,8 @@ function adminPage() {
   P.push('function hideProgressModal(){if(progressModal){progressModal.remove();progressModal=null}}');
   P.push('async function editMovie(id){var pg=1,all=[];while(true){var r=await fetch("/api/movies?page="+pg+"&noshuffle=1");var d=await r.json();all=all.concat(d.items);if(pg>=d.totalPages)break;pg++}var mv=all.find(function(x){return x.id===id});if(!mv)return;$("eid").value=mv.id;$("title").value=mv.title;$("embedUrl").value=mv.embedUrl||"";$("contentUrl").value=mv.sdUrl||mv.contentUrl||"";$("hdUrl").value=mv.hdUrl||"";$("hlsUrl").value=mv.hlsUrl||"";$("thumb").value=mv.thumbnail||"";$("previewUrl").value=mv.previewUrl||"";$("previewUrl").dataset.userEdited="1";$("vurl").value=mv.videoUrl||"";$("videoIdField").value="";$("ft").textContent="Edit Movie";$("sb").textContent="Update";$("cb").classList.remove("hidden");window.scrollTo({top:0,behavior:"smooth"})}');
   P.push('async function delMovie(id){if(!confirm("Delete?"))return;var r=await fetch("/api/movies/"+encodeURIComponent(id),{method:"DELETE",headers:{"X-Admin-Password":token}});if(r.ok)loadList()}');
-  P.push('async function loadAds(){var r=await fetch("/api/ads");var d=await r.json();$("adsTop").value=d.top||d.code||"";$("adsMiddle").value=d.middle||"";$("adsFooter").value=d.footer||d.code||"";$("adsSponsor").value=d.sponsor||""}');
-  P.push('async function saveAds(){var m=$("adm");var body={top:$("adsTop").value,middle:$("adsMiddle").value,footer:$("adsFooter").value,sponsor:$("adsSponsor").value};var r=await fetch("/api/ads",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify(body)});if(r.ok){m.textContent="Saved";m.className="msg ok show"}else{m.textContent="Failed";m.className="msg err show"}setTimeout(function(){m.classList.remove("show")},2500)}');
+  P.push('async function loadAds(){var r=await fetch("/api/ads");var d=await r.json();$("adsTop").value=d.top||d.code||"";$("adsMiddle").value=d.middle||d.code||"";$("adsFooter").value=d.footer||d.code||"";$("adsSponsor").value=d.sponsor||""}');
+  P.push('async function saveAds(){var m=$("adm");var payload={top:$("adsTop").value,middle:$("adsMiddle").value,footer:$("adsFooter").value,sponsor:$("adsSponsor").value};var r=await fetch("/api/ads",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify(payload)});if(r.ok){m.textContent="Saved";m.className="msg ok show"}else{m.textContent="Failed";m.className="msg err show"}setTimeout(function(){m.classList.remove("show")},2500)}');
   P.push('async function loadIntervalLink(){try{var r=await fetch("/api/interval-link");var d=await r.json();$("intervalLinkInput").value=d.url||"";$("intervalSecondsInput").value=d.seconds||60;$("intervalFirstDelayInput").value=d.firstDelay||15}catch(e){}}');
   P.push('async function saveIntervalLink(){var u=$("intervalLinkInput").value.trim();var s=parseInt($("intervalSecondsInput").value)||60;var f=parseInt($("intervalFirstDelayInput").value)||15;var m=$("ilm");if(s<5){m.textContent="Min 5s";m.className="msg err show";return}try{var r=await fetch("/api/interval-link",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({url:u,seconds:s,firstDelay:f})});if(r.ok){m.textContent="✅ Saved";m.className="msg ok show"}else{m.textContent="Failed";m.className="msg err show"}}catch(e){m.textContent=e.message;m.className="msg err show"}setTimeout(function(){m.classList.remove("show")},3000)}');
   P.push('async function loadAdFrame(){try{var r=await fetch("/api/ad-frame");var d=await r.json();$("adFrameUrl").value=d.url||""}catch(e){}}');
