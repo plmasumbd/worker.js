@@ -39,9 +39,11 @@ export default {
     if (p === "/api/debug-embed" && request.method === "GET") return debugEmbed(url);
     if (p === "/api/stream" && request.method === "GET") return streamVideo(request, env, url);
 
+    if (p === "/robots.txt") return new Response("User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /api/\nSitemap: https://adultmovie.top/sitemap.xml\n", { headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=3600" } });
+    if (p === "/sitemap.xml") return sitemap(env);
     if (p === "/") return html(homePage());
     if (p === "/admin") return html(adminPage());
-    if (p === "/watch") return html(watchPage(url.searchParams.get("id")));
+    if (p === "/watch") return await watchPage(url.searchParams.get("id"), env);
 
     return new Response("404", { status: 404 });
   },
@@ -657,7 +659,13 @@ async function trackView(request, env) {
 // 🏠 Home Page — with 5s Hover Preview
 // ═══════════════════════════════════════════════════════════
 function homePage() {
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AdultMovie</title>
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AdultMovie - Browse Videos</title>
+<meta name="description" content="Browse videos on AdultMovie. Explore video titles and discover related content.">
+<meta name="robots" content="index,follow,max-image-preview:large">
+<link rel="canonical" href="https://adultmovie.top/">
+<meta property="og:type" content="website"><meta property="og:site_name" content="AdultMovie">
+<meta property="og:title" content="AdultMovie - Browse Videos"><meta property="og:description" content="Browse videos and discover related content on AdultMovie."><meta property="og:url" content="https://adultmovie.top/">
+<meta name="twitter:card" content="summary">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#eee;min-height:100vh}
 header{background:#1a1a1a;padding:15px 24px;display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #ff0040;position:sticky;top:0;z-index:100;flex-wrap:wrap;gap:10px}
@@ -858,8 +866,28 @@ loadAdFrameUrl().then(function(){load(1)});
 // ═══════════════════════════════════════════════════════════
 // 🎬 Watch Page
 // ═══════════════════════════════════════════════════════════
-function watchPage(id) {
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Watch</title>
+async function watchPage(id, env) {
+  const raw = id ? await env.MOVIES.get("movie_list") : null;
+  const movies = raw ? JSON.parse(raw) : [];
+  const movie = movies.find(m => String(m.id) === String(id));
+  if (!movie) return new Response("Video not found", { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8", "X-Robots-Tag": "noindex, nofollow" } });
+  const title = String(movie.title || "Watch video").replace(/[<>]/g, "").slice(0, 180);
+  const escMeta = v => String(v || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const canonical = "https://adultmovie.top/watch?id=" + encodeURIComponent(movie.id);
+  const description = "Watch " + title + " on AdultMovie. Discover related videos and more.";
+  const thumb = /^https:\/\//i.test(movie.thumbnail || "") ? movie.thumbnail : "";
+  const videoSchema = { "@context": "https://schema.org", "@type": "VideoObject", "name": title, "description": description, "thumbnailUrl": thumb ? [thumb] : undefined, "uploadDate": movie.createdAt ? new Date(movie.createdAt).toISOString() : undefined, "embedUrl": canonical, "url": canonical };
+  const seoHead = `<title>${escMeta(title)} | AdultMovie</title>
+<meta name="description" content="${escMeta(description)}">
+<meta name="robots" content="index,follow,max-image-preview:large">
+<link rel="canonical" href="${escMeta(canonical)}">
+<meta property="og:type" content="video.other"><meta property="og:site_name" content="AdultMovie">
+<meta property="og:title" content="${escMeta(title)}"><meta property="og:description" content="${escMeta(description)}"><meta property="og:url" content="${escMeta(canonical)}">
+${thumb ? `<meta property="og:image" content="${escMeta(thumb)}">` : ""}
+<meta name="twitter:card" content="${thumb ? "summary_large_image" : "summary"}"><meta name="twitter:title" content="${escMeta(title)}"><meta name="twitter:description" content="${escMeta(description)}">
+${thumb ? `<meta name="twitter:image" content="${escMeta(thumb)}">` : ""}
+<script type="application/ld+json">${JSON.stringify(videoSchema).replace(/</g, "\u003c")}</script>`;
+  const page = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">${seoHead}
 <style>
 *{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#eee}
 header{background:#1a1a1a;padding:14px 24px;border-bottom:2px solid #ff0040;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100}
@@ -1223,6 +1251,24 @@ function showVideoError(){
 loadData();
 loadBottomAdFrame();
 </script></body></html>`;
+  return new Response(page, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=60" } });
+}
+
+// XML sitemap for every published watch page
+async function sitemap(env) {
+  const raw = await env.MOVIES.get("movie_list");
+  const list = raw ? JSON.parse(raw) : [];
+  const escXml = v => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+  const urls = ['<url><loc>https://adultmovie.top/</loc></url>'];
+  for (const m of list) {
+    if (!m || !m.id) continue;
+    const loc = "https://adultmovie.top/watch?id=" + encodeURIComponent(m.id);
+    const lastmod = m.createdAt && Number.isFinite(Number(m.createdAt)) ? new Date(Number(m.createdAt)).toISOString() : "";
+    urls.push("<url><loc>" + escXml(loc) + "</loc>" + (lastmod ? "<lastmod>" + lastmod + "</lastmod>" : "") + "</url>");
+  }
+  return new Response('<?xml version="1.0" encoding="UTF-8"?>' + '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + urls.join("") + '</urlset>', {
+    headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "public, max-age=3600" }
+  });
 }
 
 // ═══════════════════════════════════════════════════════════
