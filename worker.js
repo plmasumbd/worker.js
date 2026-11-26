@@ -871,10 +871,19 @@ async function watchPage(id, env) {
   const movies = raw ? JSON.parse(raw) : [];
   const movie = movies.find(m => String(m.id) === String(id));
   if (!movie) return new Response("Video not found", { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8", "X-Robots-Tag": "noindex, nofollow" } });
-  const title = String(movie.title || "Watch video").replace(/[<>]/g, "").slice(0, 180);
-  const escMeta = v => String(v || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // Decode common HTML entities before writing real, readable server-rendered text.
+  const decodeEntities = value => String(value || "")
+    .replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'")
+    .replace(/&period;/gi, ".").replace(/&comma;/gi, ",").replace(/&colon;/gi, ":")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Math.min(0x10FFFF, Number(n))))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Math.min(0x10FFFF, parseInt(n, 16))));
+  const escHtml = value => String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  const title = decodeEntities(movie.title || "Watch video").replace(/[\r\n\t]+/g, " ").trim().slice(0, 180) || "Watch video";
   const canonical = "https://adultmovie.top/watch?id=" + encodeURIComponent(movie.id);
-  const description = "Watch " + title + " on AdultMovie. Discover related videos and more.";
+  const rawDescription = decodeEntities(movie.description || movie.summary || movie.plot || "").replace(/[\r\n\t]+/g, " ").trim();
+  const description = (rawDescription || ("Watch " + title + " on AdultMovie. Explore related videos." )).slice(0, 300);
+  const escMeta = escHtml;
   const thumb = /^https:\/\//i.test(movie.thumbnail || "") ? movie.thumbnail : "";
   const videoSchema = { "@context": "https://schema.org", "@type": "VideoObject", "name": title, "description": description, "thumbnailUrl": thumb ? [thumb] : undefined, "uploadDate": movie.createdAt ? new Date(movie.createdAt).toISOString() : undefined, "embedUrl": canonical, "url": canonical };
   const seoHead = `<title>${escMeta(title)} | AdultMovie</title>
@@ -898,7 +907,7 @@ header a.logo{color:#ff0040;font-size:22px;font-weight:bold;text-decoration:none
 .loader-box{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#000;z-index:10}
 .spinner{width:50px;height:50px;border:5px solid rgba(255,0,64,.2);border-top-color:#ff0040;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:15px}
 @keyframes spin{to{transform:rotate(360deg)}}.loader-text{color:#ff0040;font-size:14px;font-weight:bold;letter-spacing:1px;text-align:center;padding:0 20px}
-.title{margin-top:18px;font-size:20px;font-weight:700;line-height:1.4}.meta{margin-top:10px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;color:#aaa;font-size:14px}
+.title{margin-top:18px;font-size:20px;font-weight:700;line-height:1.4}.seo-description{margin-top:10px;color:#bbb;font-size:14px;line-height:1.7}.meta{margin-top:10px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;color:#aaa;font-size:14px}
 .meta .views{color:#ff9800;font-weight:600}.ad{margin:20px 0;text-align:center;overflow:hidden}
 .section-title{margin:32px 0 16px;font-size:18px;font-weight:700;color:#fff;display:flex;align-items:center;gap:10px}
 .section-title:before{content:"";width:4px;height:22px;background:#ff0040;border-radius:2px}
@@ -942,7 +951,8 @@ header a.logo{color:#ff0040;font-size:22px;font-weight:bold;text-decoration:none
 <div class="quality-bar" id="qualityBar" style="display:none"><select id="qualitySelect" aria-label="Video quality"><option value="hls">Ultra HD</option><option value="hd">HD</option></select></div>
 <div class="video-error" id="videoError"><h3>⚠️ Video Not Loading</h3><p>Try reloading or pick another video.</p><button onclick="location.reload()">🔄 Reload</button></div>
 </div>
-<div class="title" id="t">Loading...</div>
+<h1 class="title" id="t">${escHtml(title)}</h1>
+<p class="seo-description">${escHtml(description)}</p>
 <div class="meta" id="metaBar"></div>
 <div class="ad" id="watchTopAd"></div>
 <div class="ad" id="adBox"></div>
@@ -1251,7 +1261,7 @@ function showVideoError(){
 loadData();
 loadBottomAdFrame();
 </script></body></html>`;
-  return new Response(page, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=60" } });
+  return new Response(page, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=60", "X-Robots-Tag": "index, follow" } });
 }
 
 // XML sitemap for every published watch page
