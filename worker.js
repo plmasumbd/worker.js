@@ -871,19 +871,10 @@ async function watchPage(id, env) {
   const movies = raw ? JSON.parse(raw) : [];
   const movie = movies.find(m => String(m.id) === String(id));
   if (!movie) return new Response("Video not found", { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8", "X-Robots-Tag": "noindex, nofollow" } });
-  // Decode common HTML entities before writing real, readable server-rendered text.
-  const decodeEntities = value => String(value || "")
-    .replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'")
-    .replace(/&period;/gi, ".").replace(/&comma;/gi, ",").replace(/&colon;/gi, ":")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Math.min(0x10FFFF, Number(n))))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Math.min(0x10FFFF, parseInt(n, 16))));
-  const escHtml = value => String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  const title = decodeEntities(movie.title || "Watch video").replace(/[\r\n\t]+/g, " ").trim().slice(0, 180) || "Watch video";
+  const title = String(movie.title || "Watch video").replace(/[<>]/g, "").slice(0, 180);
+  const escMeta = v => String(v || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const canonical = "https://adultmovie.top/watch?id=" + encodeURIComponent(movie.id);
-  const rawDescription = decodeEntities(movie.description || movie.summary || movie.plot || "").replace(/[\r\n\t]+/g, " ").trim();
-  const description = (rawDescription || ("Watch " + title + " on AdultMovie. Explore related videos." )).slice(0, 300);
-  const escMeta = escHtml;
+  const description = "Watch " + title + " on AdultMovie. Discover related videos and more.";
   const thumb = /^https:\/\//i.test(movie.thumbnail || "") ? movie.thumbnail : "";
   const videoSchema = { "@context": "https://schema.org", "@type": "VideoObject", "name": title, "description": description, "thumbnailUrl": thumb ? [thumb] : undefined, "uploadDate": movie.createdAt ? new Date(movie.createdAt).toISOString() : undefined, "embedUrl": canonical, "url": canonical };
   const seoHead = `<title>${escMeta(title)} | AdultMovie</title>
@@ -907,7 +898,7 @@ header a.logo{color:#ff0040;font-size:22px;font-weight:bold;text-decoration:none
 .loader-box{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#000;z-index:10}
 .spinner{width:50px;height:50px;border:5px solid rgba(255,0,64,.2);border-top-color:#ff0040;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:15px}
 @keyframes spin{to{transform:rotate(360deg)}}.loader-text{color:#ff0040;font-size:14px;font-weight:bold;letter-spacing:1px;text-align:center;padding:0 20px}
-.title{margin-top:18px;font-size:20px;font-weight:700;line-height:1.4}.seo-description{margin-top:10px;color:#bbb;font-size:14px;line-height:1.7}.meta{margin-top:10px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;color:#aaa;font-size:14px}
+.title{margin-top:18px;font-size:20px;font-weight:700;line-height:1.4}.meta{margin-top:10px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;color:#aaa;font-size:14px}
 .meta .views{color:#ff9800;font-weight:600}.ad{margin:20px 0;text-align:center;overflow:hidden}
 .section-title{margin:32px 0 16px;font-size:18px;font-weight:700;color:#fff;display:flex;align-items:center;gap:10px}
 .section-title:before{content:"";width:4px;height:22px;background:#ff0040;border-radius:2px}
@@ -951,8 +942,7 @@ header a.logo{color:#ff0040;font-size:22px;font-weight:bold;text-decoration:none
 <div class="quality-bar" id="qualityBar" style="display:none"><select id="qualitySelect" aria-label="Video quality"><option value="hls">Ultra HD</option><option value="hd">HD</option></select></div>
 <div class="video-error" id="videoError"><h3>⚠️ Video Not Loading</h3><p>Try reloading or pick another video.</p><button onclick="location.reload()">🔄 Reload</button></div>
 </div>
-<h1 class="title" id="t">${escHtml(title)}</h1>
-<p class="seo-description">${escHtml(description)}</p>
+<div class="title" id="t">Loading...</div>
 <div class="meta" id="metaBar"></div>
 <div class="ad" id="watchTopAd"></div>
 <div class="ad" id="adBox"></div>
@@ -1261,7 +1251,7 @@ function showVideoError(){
 loadData();
 loadBottomAdFrame();
 </script></body></html>`;
-  return new Response(page, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=60", "X-Robots-Tag": "index, follow" } });
+  return new Response(page, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=60" } });
 }
 
 // XML sitemap for every published watch page
@@ -1424,13 +1414,11 @@ function adminPage() {
   P.push('}');
   P.push('function reset(){$("eid").value="";$("title").value="";$("vurl").value="";$("thumb").value="";$("previewUrl").value="";$("videoIdField").value="";$("embedUrl").value="";$("contentUrl").value="";$("hlsUrl").value="";$("ft").textContent="Add / Edit Movie";$("sb").textContent="Add Movie";$("cb").classList.add("hidden");$("previewUrl").dataset.userEdited=""}');
   P.push('function parseViewSource(){');
-  P.push('  var text=$("viewSource").value||"";var m=$("psm");');
+  P.push('  var text=($("viewSource").value||"").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,"\\"").replace(/&#39;/g,"\'").replace(/&amp;/g,"&");var m=$("psm");');
   P.push('  if(!text||!text.trim()){m.textContent="Paste source first";m.className="msg err show";return}');
   P.push('  var found=[];var title="";');
-  P.push('  function decodeTitleEntities(value){var out=String(value||"");for(var n=0;n<5;n++){var box=document.createElement("textarea");box.innerHTML=out;var next=box.value;if(next===out)break;out=next}return out.replace(/[\\r\\n\\t]+/g," ").replace(/\\s+/g," ").trim()}');
-  P.push('  try{var titleDoc=new DOMParser().parseFromString(text,"text/html");var metaTitle=titleDoc.querySelector("meta[property=\\\"og:title\\\"],meta[name=\\\"twitter:title\\\"]");if(metaTitle)title=metaTitle.getAttribute("content")||"";if(!title){var jsonNodes=titleDoc.querySelectorAll("script[type=\\\"application/ld+json\\\"]");for(var ji=0;ji<jsonNodes.length&&!title;ji++){try{var jd=JSON.parse(jsonNodes[ji].textContent);var stack=Array.isArray(jd)?jd:[jd];while(stack.length&&!title){var obj=stack.shift();if(!obj||typeof obj!=="object")continue;if(obj.name&&typeof obj.name==="string")title=obj.name;if(obj["@graph"])stack=stack.concat(obj["@graph"]);if(obj.itemListElement)stack=stack.concat(obj.itemListElement)}}catch(e){}}}if(!title)title=(titleDoc.querySelector("title")||{}).textContent||""}catch(e){}');
-  P.push('  if(!title){var tm=text.match(/<meta[^>]*(?:property|name)=[\\\'\\\"](?:og:title|twitter:title)[\\\'\\\"][^>]*content=[\\\'\\\"]([\\s\\S]*?)[\\\'\\\"]/i)||text.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i);if(tm)title=tm[1]}');
-  P.push('  title=decodeTitleEntities(title);if(title)found.push("Title");');
+  P.push('  var tm=text.match(/<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']/i)||text.match(/<title>([^<]+)<\\/title>/i);');
+  P.push('  if(tm){title=tm[1].trim();found.push("Title")}');
   P.push('  var embedUrl="";var iframes=text.match(/<iframe[\\s\\S]*?>/gi)||[];for(var i=0;i<iframes.length;i++){var sm=iframes[i].match(/src\\s*=\\s*["\']([^"\']+)["\']/i);if(sm&&/embedframe|embed\\/|player\\//i.test(sm[1])){embedUrl=sm[1].replace(/&amp;/g,"&");break}}if(!embedUrl){var iv=text.match(/id=["\']copy-video-embed["\'][^>]*value=["\']([^"\']+)["\']/i);if(iv){var im=iv[1].match(/src\\s*=\\s*["\']([^"\']+)["\']/i);if(im)embedUrl=im[1].replace(/&amp;/g,"&")}}if(embedUrl)found.push("Embed URL");');
   P.push('  var contentUrl="";');
   P.push('  var hm=text.match(/setVideoHLS\\s*\\(\\s*["\\x27]([^"\\x27]+)["\\x27]/i);if(hm)$("hlsUrl").value=hm[1].replace(/&amp;/g,"&");');
@@ -1439,7 +1427,7 @@ function adminPage() {
   P.push('  var thumb="";');
   P.push('  var thm=text.match(/"thumbnailUrl"\\s*:\\s*\\[\\s*"([^"]+)"/i)||text.match(/"thumbnailUrl"\\s*:\\s*"([^"]+)"/i);');
   P.push('  if(thm){thumb=thm[1].replace(/&amp;/g,"&");found.push("Thumbnail")}');
-  P.push('  if(title)$("title").value=title;');
+  P.push('  if(title)$("title").value=String(title).replace(/&sol;/g,"/").replace(/&apos;/g,"\'").replace(/&quot;/g,"\\"").replace(/&#x27;/gi,"\'").replace(/&#39;/g,"\'").replace(/&#x2F;/gi,"/").replace(/&#x3D;/gi,"=").replace(/&nbsp;/g," ").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&amp;/g,"&");');
   P.push('  if(embedUrl)$("embedUrl").value=embedUrl;');
   P.push('  if(contentUrl)$("contentUrl").value=contentUrl;');
   P.push('  if(thumb){$("thumb").value=thumb;var autoPv=derivePreview(thumb);if(autoPv){$("previewUrl").value=autoPv;found.push("Preview (auto)")}}');
