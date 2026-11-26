@@ -1424,11 +1424,13 @@ function adminPage() {
   P.push('}');
   P.push('function reset(){$("eid").value="";$("title").value="";$("vurl").value="";$("thumb").value="";$("previewUrl").value="";$("videoIdField").value="";$("embedUrl").value="";$("contentUrl").value="";$("hlsUrl").value="";$("ft").textContent="Add / Edit Movie";$("sb").textContent="Add Movie";$("cb").classList.add("hidden");$("previewUrl").dataset.userEdited=""}');
   P.push('function parseViewSource(){');
-  P.push('  var text=($("viewSource").value||"").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,"\\"").replace(/&#39;/g,"\'").replace(/&amp;/g,"&");var m=$("psm");');
+  P.push('  var text=$("viewSource").value||"";var m=$("psm");');
   P.push('  if(!text||!text.trim()){m.textContent="Paste source first";m.className="msg err show";return}');
   P.push('  var found=[];var title="";');
-  P.push('  var tm=text.match(/<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']/i)||text.match(/<title>([^<]+)<\\/title>/i);');
-  P.push('  if(tm){title=tm[1].trim();found.push("Title")}');
+  P.push('  function decodeTitleEntities(value){var out=String(value||"");for(var n=0;n<5;n++){var box=document.createElement("textarea");box.innerHTML=out;var next=box.value;if(next===out)break;out=next}return out.replace(/[\\r\\n\\t]+/g," ").replace(/\\s+/g," ").trim()}');
+  P.push('  try{var titleDoc=new DOMParser().parseFromString(text,"text/html");var metaTitle=titleDoc.querySelector("meta[property=\\\"og:title\\\"],meta[name=\\\"twitter:title\\\"]");if(metaTitle)title=metaTitle.getAttribute("content")||"";if(!title){var jsonNodes=titleDoc.querySelectorAll("script[type=\\\"application/ld+json\\\"]");for(var ji=0;ji<jsonNodes.length&&!title;ji++){try{var jd=JSON.parse(jsonNodes[ji].textContent);var stack=Array.isArray(jd)?jd:[jd];while(stack.length&&!title){var obj=stack.shift();if(!obj||typeof obj!=="object")continue;if(obj.name&&typeof obj.name==="string")title=obj.name;if(obj["@graph"])stack=stack.concat(obj["@graph"]);if(obj.itemListElement)stack=stack.concat(obj.itemListElement)}}catch(e){}}}if(!title)title=(titleDoc.querySelector("title")||{}).textContent||""}catch(e){}');
+  P.push('  if(!title){var tm=text.match(/<meta[^>]*(?:property|name)=[\\\'\\\"](?:og:title|twitter:title)[\\\'\\\"][^>]*content=[\\\'\\\"]([\\s\\S]*?)[\\\'\\\"]/i)||text.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i);if(tm)title=tm[1]}');
+  P.push('  title=decodeTitleEntities(title);if(title)found.push("Title");');
   P.push('  var embedUrl="";var iframes=text.match(/<iframe[\\s\\S]*?>/gi)||[];for(var i=0;i<iframes.length;i++){var sm=iframes[i].match(/src\\s*=\\s*["\']([^"\']+)["\']/i);if(sm&&/embedframe|embed\\/|player\\//i.test(sm[1])){embedUrl=sm[1].replace(/&amp;/g,"&");break}}if(!embedUrl){var iv=text.match(/id=["\']copy-video-embed["\'][^>]*value=["\']([^"\']+)["\']/i);if(iv){var im=iv[1].match(/src\\s*=\\s*["\']([^"\']+)["\']/i);if(im)embedUrl=im[1].replace(/&amp;/g,"&")}}if(embedUrl)found.push("Embed URL");');
   P.push('  var contentUrl="";');
   P.push('  var hm=text.match(/setVideoHLS\\s*\\(\\s*["\\x27]([^"\\x27]+)["\\x27]/i);if(hm)$("hlsUrl").value=hm[1].replace(/&amp;/g,"&");');
@@ -1437,7 +1439,7 @@ function adminPage() {
   P.push('  var thumb="";');
   P.push('  var thm=text.match(/"thumbnailUrl"\\s*:\\s*\\[\\s*"([^"]+)"/i)||text.match(/"thumbnailUrl"\\s*:\\s*"([^"]+)"/i);');
   P.push('  if(thm){thumb=thm[1].replace(/&amp;/g,"&");found.push("Thumbnail")}');
-  P.push('  if(title)$("title").value=String(title).replace(/&sol;/g,"/").replace(/&apos;/g,"\'").replace(/&quot;/g,"\\"").replace(/&#x27;/gi,"\'").replace(/&#39;/g,"\'").replace(/&#x2F;/gi,"/").replace(/&#x3D;/gi,"=").replace(/&nbsp;/g," ").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&amp;/g,"&");');
+  P.push('  if(title)$("title").value=title;');
   P.push('  if(embedUrl)$("embedUrl").value=embedUrl;');
   P.push('  if(contentUrl)$("contentUrl").value=contentUrl;');
   P.push('  if(thumb){$("thumb").value=thumb;var autoPv=derivePreview(thumb);if(autoPv){$("previewUrl").value=autoPv;found.push("Preview (auto)")}}');
