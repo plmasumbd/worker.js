@@ -694,7 +694,7 @@ var SEED=Math.random().toString(36).substring(2,12),P=1,S="",AD_FRAME_URL="",MID
 function $(i){return document.getElementById(i)}
 function getWatched(){try{return JSON.parse(localStorage.getItem("watched_ids")||"[]")}catch(e){return[]}}
 function fmt(n){n=parseInt(n)||0;if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1e3)return(n/1e3).toFixed(1)+"K";return n}
-function esc(s){return String(s).replace(/[&<>]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;"}[c]})}
+function decodeText(s){var v=String(s==null?"":s);for(var i=0;i<4;i++){var t=document.createElement("textarea");t.innerHTML=v;var n=t.value;if(n===v)break;v=n}return v}function esc(s){return decodeText(s).replace(/[&<>"\\"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]})}
 function triggerSearch(){S=$("searchInput").value.trim();P=1;load(1)}
 function injectAds(id,code){var c=$(id);if(!c)return;c.innerHTML="";var t=document.createElement("div");t.innerHTML=code;var sc=[];Array.from(t.childNodes).forEach(function(n){if(n.tagName==="SCRIPT"){var s=document.createElement("script");if(n.src)s.src=n.src;else s.textContent=n.textContent;sc.push(s)}else{c.appendChild(n.cloneNode(true))}});sc.forEach(function(s){c.appendChild(s)})}
 async function loadAds(){if(localStorage.getItem("admin_token"))return;try{var r=await fetch("/api/ads");var d=await r.json();if(d.top)injectAds("adTop",d.top);if(d.middle){MIDDLE_AD_CODE=d.middle;placeRandomMiddleBanner()}if(d.footer)injectAds("adFooter",d.footer);if(d.sponsor)injectAds("adSponsor",d.sponsor);else if(d.code){injectAds("adTop",d.code);injectAds("adFooter",d.code)}}catch(e){}}
@@ -872,12 +872,19 @@ async function watchPage(id, env) {
   const movie = movies.find(m => String(m.id) === String(id));
   if (!movie) return new Response("Video not found", { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8", "X-Robots-Tag": "noindex, nofollow" } });
   // Decode common HTML entities before writing real, readable server-rendered text.
-  const decodeEntities = value => String(value || "")
-    .replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'")
-    .replace(/&period;/gi, ".").replace(/&comma;/gi, ",").replace(/&colon;/gi, ":")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Math.min(0x10FFFF, Number(n))))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Math.min(0x10FFFF, parseInt(n, 16))));
+  const decodeEntities = value => {
+    const named = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", comma: ",", period: ".", colon: ":", semi: ";", sol: "/", num: "#", equals: "=", quest: "?", excl: "!", dollar: "$", percnt: "%", lpar: "(", rpar: ")", ast: "*", plus: "+", commat: "@", hyphen: "-", lowbar: "_" };
+    let out = String(value || "");
+    // Decode repeatedly to handle double-encoded values such as &amp;comma;.
+    for (let i = 0; i < 4; i++) {
+      const prev = out;
+      out = out.replace(/&([a-z][a-z0-9]+);/gi, (m, name) => Object.prototype.hasOwnProperty.call(named, name.toLowerCase()) ? named[name.toLowerCase()] : m)
+        .replace(/&#(\d+);/g, (m, n) => { const cp = Number(n); return cp > 0 && cp <= 0x10FFFF && !(cp >= 0xD800 && cp <= 0xDFFF) ? String.fromCodePoint(cp) : m; })
+        .replace(/&#x([0-9a-f]+);/gi, (m, n) => { const cp = parseInt(n, 16); return cp > 0 && cp <= 0x10FFFF && !(cp >= 0xD800 && cp <= 0xDFFF) ? String.fromCodePoint(cp) : m; });
+      if (out === prev) break;
+    }
+    return out;
+  };
   const escHtml = value => String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   const title = decodeEntities(movie.title || "Watch video").replace(/[\r\n\t]+/g, " ").trim().slice(0, 180) || "Watch video";
   const canonical = "https://adultmovie.top/watch?id=" + encodeURIComponent(movie.id);
@@ -1118,8 +1125,8 @@ async function loadData(){
     if(!r.ok)throw new Error("Not found");
     var d=await r.json();
     movieData=d.movie;
-    document.title=movieData.title;
-    $("t").textContent=movieData.title;
+    document.title=decodeText(movieData.title);
+    $("t").textContent=decodeText(movieData.title);
     renderMeta();
     markWatched(movieData.id);
     var needsScrape=!movieData.contentUrl || !movieData.hlsUrl;
