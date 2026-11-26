@@ -682,14 +682,15 @@ header a.logo{color:#ff0040;font-size:24px;font-weight:bold;text-decoration:none
 <header><a href="/" class="logo">AdultMovie</a><div class="search-box"><input id="searchInput" placeholder="Search..." onkeypress="if(event.key==='Enter')triggerSearch()"><button onclick="triggerSearch()">Search</button></div></header>
 <div class="box"><div class="ad" id="adTop"></div><div class="ad" id="adSponsor"></div><div id="grid" class="grid"></div><div class="ad" id="adMiddle"></div><div id="pager" class="pager"></div><div class="ad" id="adBot"></div><div class="ad" id="adFooter"></div></div>
 <script>
-var SEED=Math.random().toString(36).substring(2,12),P=1,S="",AD_FRAME_URL="";
+var SEED=Math.random().toString(36).substring(2,12),P=1,S="",AD_FRAME_URL="",MIDDLE_AD_CODE="",MIDDLE_AD_SEQ=0;
 function $(i){return document.getElementById(i)}
 function getWatched(){try{return JSON.parse(localStorage.getItem("watched_ids")||"[]")}catch(e){return[]}}
 function fmt(n){n=parseInt(n)||0;if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1e3)return(n/1e3).toFixed(1)+"K";return n}
 function esc(s){return String(s).replace(/[&<>]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;"}[c]})}
 function triggerSearch(){S=$("searchInput").value.trim();P=1;load(1)}
 function injectAds(id,code){var c=$(id);if(!c)return;c.innerHTML="";var t=document.createElement("div");t.innerHTML=code;var sc=[];Array.from(t.childNodes).forEach(function(n){if(n.tagName==="SCRIPT"){var s=document.createElement("script");if(n.src)s.src=n.src;else s.textContent=n.textContent;sc.push(s)}else{c.appendChild(n.cloneNode(true))}});sc.forEach(function(s){c.appendChild(s)})}
-async function loadAds(){if(localStorage.getItem("admin_token"))return;try{var r=await fetch("/api/ads");var d=await r.json();if(d.top)injectAds("adTop",d.top);if(d.middle)injectAds("adMiddle",d.middle);if(d.footer)injectAds("adFooter",d.footer);if(d.sponsor)injectAds("adSponsor",d.sponsor);else if(d.code){injectAds("adTop",d.code);injectAds("adFooter",d.code)}}catch(e){}}
+async function loadAds(){if(localStorage.getItem("admin_token"))return;try{var r=await fetch("/api/ads");var d=await r.json();if(d.top)injectAds("adTop",d.top);if(d.middle){MIDDLE_AD_CODE=d.middle;placeRandomMiddleBanner()}if(d.footer)injectAds("adFooter",d.footer);if(d.sponsor)injectAds("adSponsor",d.sponsor);else if(d.code){injectAds("adTop",d.code);injectAds("adFooter",d.code)}}catch(e){}}
+function placeRandomMiddleBanner(){var g=$("grid");if(!g||!MIDDLE_AD_CODE||localStorage.getItem("admin_token"))return;var old=document.getElementById("randomMiddleBanner");if(old)old.remove();var banner=document.createElement("div");banner.className="ad";banner.id="randomMiddleBanner"+(++MIDDLE_AD_SEQ);banner.style.gridColumn="1 / -1";var cards=Array.from(g.children).filter(function(n){return n.classList&&n.classList.contains("card")});if(!cards.length)return;var slot=Math.floor(Math.random()*(cards.length+1));g.insertBefore(banner,cards[slot]||null);var t=document.createElement("div");t.innerHTML=MIDDLE_AD_CODE;var scripts=[];Array.from(t.childNodes).forEach(function(n){if(n.tagName==="SCRIPT"){var sc=document.createElement("script");if(n.src)sc.src=n.src;else sc.textContent=n.textContent;scripts.push(sc)}else{banner.appendChild(n.cloneNode(true))}});scripts.forEach(function(sc){banner.appendChild(sc)})}
 async function loadAdFrameUrl(){try{var r=await fetch("/api/ad-frame");var d=await r.json();AD_FRAME_URL=(d.url||"").trim()}catch(e){}}
 
 function hiddenIframe(url){
@@ -839,9 +840,11 @@ async function load(p){
       adCard.className="card";
       adCard.style.cursor="default";
       adCard.innerHTML='<div class="thumb" style="background:#000;position:relative;overflow:hidden;"><iframe src="'+AD_FRAME_URL.replace(/"/g,"&quot;")+'" style="position:absolute;inset:0;width:100%;height:100%;border:0;" loading="lazy" sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads"></iframe></div><div class="info"><h3 style="color:#ff9800">📢 Sponsored</h3></div>';
+      // Sponsored card stays in its original fixed position (after the third video card)
       var kids=g.children;
       g.insertBefore(adCard,kids[Math.min(3,kids.length)]);
     }
+    placeRandomMiddleBanner();
     pager(d.page,d.totalPages);
     try{bgScrape(d.items)}catch(e){}
   }catch(e){$("grid").innerHTML='<div class="empty">Error</div>'}
