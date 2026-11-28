@@ -236,12 +236,14 @@ function extractVideoUrls(text) {
   const hd = pick([
     /(?:html5player\.)?setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]/i,
     /setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]/i,
-    /"contentUrl"\s*:\s*"([^"]+)"/i,
+    /setVideoUrl(?:Low)?\s*\(\s*['"]([^'"]+)['"]/i,
+    /"(?:contentUrl|videoUrl)"\s*:\s*"([^"]+\.(?:mp4|webm)(?:\?[^" ]*)?)"/i,
+    /(https?:\/\/[^"'\s<>]+\.(?:mp4|webm)(?:\?[^"'\s<>]*)?)/i,
   ]);
   const hls = pick([
     /(?:html5player\.)?setVideoHLS\s*\(\s*['"]([^'"]+)['"]/i,
     /setVideoHLS\s*\(\s*['"]([^'"]+)['"]/i,
-    /"hlsUrl"\s*:\s*"([^"]+)"/i,
+    /"(?:hlsUrl|hls|manifestUrl)"\s*:\s*"([^"]+\.m3u8[^" ]*)"/i,
     /(https?:\/\/[^"'\s<>\\]+\.m3u8[^"'\s<>\\]*)/i
   ]);
   return { hd: hd && !/\.m3u8(?:[?#]|$)/i.test(hd) ? hd : "", hls: hls || (/\.m3u8(?:[?#]|$)/i.test(hd) ? hd : "") };
@@ -1435,10 +1437,10 @@ function adminPage() {
   P.push('  if(!title){var tm=text.match(/<meta[^>]*(?:property|name)=[\\\'\\\"](?:og:title|twitter:title)[\\\'\\\"][^>]*content=[\\\'\\\"]([\\s\\S]*?)[\\\'\\\"]/i)||text.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i);if(tm)title=tm[1]}');
   P.push('  title=decodeTitleEntities(title);if(title)found.push("Title");');
   P.push('  var embedUrl="";try{var embedDoc=new DOMParser().parseFromString(text,"text/html");var copyInput=embedDoc.getElementById("copy-video-embed");if(copyInput){var iframeHtml=copyInput.getAttribute("value")||copyInput.value||"";var iframeDoc=new DOMParser().parseFromString(iframeHtml,"text/html");var embeddedFrame=iframeDoc.querySelector("iframe");if(embeddedFrame)embedUrl=embeddedFrame.getAttribute("src")||""}}catch(e){}if(!embedUrl){var iframes=text.match(/<iframe[\\s\\S]*?>/gi)||[];for(var i=0;i<iframes.length;i++){var sm=iframes[i].match(/src\\s*=\\s*["\\\']([^"\\\']+)["\\\']/i);if(sm&&/embedframe|embed\\/|player\\//i.test(sm[1])){embedUrl=sm[1].replace(/&amp;/g,"&");break}}}if(!embedUrl){var iv=text.match(/id=["\\\']copy-video-embed["\\\'][^>]*value=["\\\']([^"\\\']+)["\\\']/i);if(iv){var decoded=decodeTitleEntities(iv[1]);var im=decoded.match(/src\\s*=\\s*["\\\']([^"\\\']+)["\\\']/i);if(im)embedUrl=im[1].replace(/&amp;/g,"&")}}if(embedUrl)found.push("Embed URL");');
-  P.push('  var contentUrl="";');
-  P.push('  var hm=text.match(/setVideoHLS\\s*\\(\\s*["\\x27]([^"\\x27]+)["\\x27]/i);if(hm)$("hlsUrl").value=hm[1].replace(/&amp;/g,"&");');
-  P.push('  var cm=text.match(/setVideoUrlHigh\\s*\\(\\s*[\'"]([^\'"]+)[\'"]/i);');
-  P.push('  if(cm){contentUrl=cm[1].replace(/&amp;/g,"&").replace(/\\\\\\//g,"/");found.push("Content URL")}');
+  P.push('  var extracted=extractUrlsFromHtml(text);');
+  P.push('  var contentUrl=extracted.hd||"";');
+  P.push('  if(extracted.hd){$("contentUrl").value=extracted.hd;found.push("HD Video URL")}');
+  P.push('  if(extracted.hls){$("hlsUrl").value=extracted.hls;found.push("HLS.m3u8 URL")}');
   P.push('  var thumb="";');
   P.push('  var thm=text.match(/"thumbnailUrl"\\s*:\\s*\\[\\s*"([^"]+)"/i)||text.match(/"thumbnailUrl"\\s*:\\s*"([^"]+)"/i);');
   P.push('  if(thm){thumb=thm[1].replace(/&amp;/g,"&");found.push("Thumbnail")}');
@@ -1566,9 +1568,13 @@ function adminPage() {
   P.push('}');
 
   P.push('function extractUrlsFromHtml(html){');
-  P.push('  var hm=html.match(/setVideoHLS\\s*\\(\\s*["\\x27]([^"\\x27]+)["\\x27]/i);');
-  P.push('  var cm=html.match(/setVideoUrlHigh\\s*\\(\\s*["\\x27]([^"\\x27]+)["\\x27]/i);');
-  P.push('  return {hd:cm?cm[1]:"",hls:hm?hm[1]:""};');
+  P.push('  var t=String(html||"").replace(/\\\\\\\//g,"/").replace(/\\u0026/gi,"&").replace(/\\u003d/gi,"=").replace(/\\u003f/gi,"?").replace(/&amp;/gi,"&");');
+  P.push('  function pick(list){for(var i=0;i<list.length;i++){var m=t.match(list[i]);if(m&&m[1])return m[1].replace(/\\\\\\\//g,"/").replace(/&amp;/gi,"&").trim()}return ""}');
+  P.push('  var hd=pick([/(?:html5player\\.)?setVideoUrlHigh\\s*\\(\\s*["\\x27]([^"\\x27]+)["\\x27]/i,/setVideoUrl\\s*\\(\\s*["\\x27]([^"\\x27]+)["\\x27]/i,/(?:"contentUrl"|"videoUrl")\\s*:\\s*"([^"]+\\.(?:mp4|webm)(?:\\?[^" ]*)?)"/i]);');
+  P.push('  var hls=pick([/(?:html5player\\.)?setVideoHLS\\s*\\(\\s*["\\x27]([^"\\x27]+)["\\x27]/i,/(?:"hlsUrl"|"hls"|"manifestUrl")\\s*:\\s*"([^"]+\\.m3u8(?:\\?[^" ]*)?)"/i,/(https?:\\/\\/[^"\\x27\\s<>]+\\.m3u8[^"\\x27\\s<>]*)/i]);');
+  P.push('  if(!hd){var raw=t.match(/(https?:\\/\\/[^"\\x27\\s<>]+\\.(?:mp4|webm)(?:\\?[^"\\x27\\s<>]*)?)/i);if(raw)hd=raw[1]}');
+  P.push('  if(/\\.m3u8(?:[?#]|$)/i.test(hd)){if(!hls)hls=hd;hd=""}');
+  P.push('  return {hd:hd,hls:hls};');
   P.push('}');
   P.push('function sleep(ms){return new Promise(function(r){setTimeout(r,ms)})}');
   P.push('var progressModal=null;');
