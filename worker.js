@@ -629,10 +629,21 @@ async function getRelatedMovies(env, url) {
   const id = url.searchParams.get("id");
   const raw = await env.MOVIES.get("movie_list");
   const list = raw ? JSON.parse(raw) : [];
-  const others = list.filter(m => m.id !== id);
-  for (let m of others) if (!m.views) m.views = Math.floor(Math.random() * 4500) + 500;
-  const shuffled = others.map(m => ({ m, r: Math.random() })).sort((a, b) => a.r - b.r).slice(0, 12).map(x => x.m);
-  return json({ items: shuffled });
+  const current = list.find(m => String(m.id) === String(id));
+  const words = value => new Set(String(value || "").toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ").split(/\s+/)
+    .filter(w => w.length > 2 && !["the","and","for","with","from","this","that","video","movie","part"].includes(w)));
+  const base = words([current?.title, current?.description, current?.summary, current?.plot].filter(Boolean).join(" "));
+  const others = list.filter(m => String(m.id) !== String(id)).map(m => {
+    const candidate = words([m.title, m.description, m.summary, m.plot].filter(Boolean).join(" "));
+    let overlap = 0;
+    candidate.forEach(w => { if (base.has(w)) overlap++; });
+    const score = base.size && candidate.size ? overlap / Math.sqrt(base.size * candidate.size) : 0;
+    return { m, score };
+  });
+  for (const x of others) if (!x.m.views) x.m.views = Math.floor(Math.random() * 4500) + 500;
+  others.sort((a, b) => b.score - a.score || (b.m.views || 0) - (a.m.views || 0));
+  return json({ items: others.slice(0, 12).map(x => x.m) });
 }
 async function getTrendingMovies(env) {
   const raw = await env.MOVIES.get("movie_list");
@@ -685,13 +696,53 @@ header a.logo{color:#ff315f;font-size:23px;font-weight:800;text-decoration:none;
 .pager{display:flex;justify-content:center;gap:8px;margin-top:40px;flex-wrap:wrap}.pager button{padding:10px 16px;background:#1c1c1c;color:#eee;border:1px solid #333;border-radius:6px;cursor:pointer}
 .pager button.active{background:#ff0040;border-color:#ff0040}.pager button:disabled{opacity:.3}
 .empty{text-align:center;padding:60px;color:#666;grid-column:1/-1}.ad{margin:20px 0;text-align:center;overflow:hidden}
+.home-section{margin:28px 0 34px}.home-section-title{margin:0 0 15px;font-size:19px;font-weight:800;color:#fff;display:flex;align-items:center;gap:10px}.home-section-title:before{content:"";width:4px;height:22px;background:#ff0040;border-radius:2px}.resume-grid,.home-trending-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}.resume-card,.home-trend-card{display:block;min-width:0;background:#1c1c1c;border:1px solid #292929;border-radius:10px;overflow:hidden;color:#eee;text-decoration:none;transition:transform .2s,border-color .2s}.resume-card:hover,.home-trend-card:hover{transform:translateY(-3px);border-color:#ff315f}.resume-thumb,.home-trend-thumb{width:100%;aspect-ratio:16/9;background:#292929;position:relative;overflow:hidden}.resume-thumb img,.home-trend-thumb img{width:100%;height:100%;object-fit:cover;display:block}.resume-play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.18);font-size:28px;color:#fff;text-shadow:0 2px 8px #000}.resume-info,.home-trend-info{padding:10px 11px}.resume-info h3,.home-trend-info h3{font-size:13px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:36px}.resume-progress{height:4px;background:#444;margin-top:9px;border-radius:5px;overflow:hidden}.resume-progress span{height:100%;display:block;background:#ff315f;border-radius:5px}.resume-time,.home-trend-views{font-size:11px;color:#999;margin-top:6px}.home-trend-rank{position:absolute;left:7px;top:7px;padding:3px 7px;border-radius:5px;background:rgba(255,0,64,.92);font-size:11px;font-weight:800;color:#fff}.home-section[hidden]{display:none}@media(max-width:600px){.resume-grid,.home-trending-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.home-section-title{font-size:17px}}
+
 </style></head><body>
 <header><a href="https://adultmovie.top/" class="logo" aria-label="AdultMovie.top Home">AdultMovie.top</a><form class="search-box" onsubmit="event.preventDefault();triggerSearch()"><span class="search-icon" aria-hidden="true">⌕</span><input id="searchInput" type="search" autocomplete="off" placeholder="Search videos by title..." aria-label="Search videos"><button type="submit">Search</button></form></header>
-<div class="box"><div class="ad" id="adTop"></div><div class="ad" id="adSponsor"></div><div id="grid" class="grid"></div><div class="ad" id="adMiddle"></div><div id="pager" class="pager"></div><div class="ad" id="adBot"></div><div class="ad" id="adFooter"></div></div>
+<div class="box"><div class="ad" id="adTop"></div><div class="ad" id="adSponsor"></div><section class="home-section" id="continueSection" hidden><h2 class="home-section-title">▶ Continue Watching</h2><div class="resume-grid" id="continueGrid"></div></section><div id="grid" class="grid"></div><div class="ad" id="adMiddle"></div><div id="pager" class="pager"></div><div class="ad" id="adBot"></div><div class="ad" id="adFooter"></div><section class="home-section" id="homeTrendingSection"><h2 class="home-section-title">🔥 Trending Videos</h2><div class="home-trending-grid" id="homeTrendingGrid"></div></section></div>
 <script>
 var SEED=Math.random().toString(36).substring(2,12),P=1,S=new URLSearchParams(location.search).get("search")||"",AD_FRAME_URL="",MIDDLE_AD_CODE="",MIDDLE_AD_SEQ=0;
 function $(i){return document.getElementById(i)}
 function getWatched(){try{return JSON.parse(localStorage.getItem("watched_ids")||"[]")}catch(e){return[]}}
+function readWatchProgress(){try{var a=JSON.parse(localStorage.getItem("watch_progress")||"[]");return Array.isArray(a)?a:[]}catch(e){return[]}}
+function formatWatchTime(n){n=Math.max(0,Math.floor(Number(n)||0));var h=Math.floor(n/3600),m=Math.floor((n%3600)/60),sec=n%60;return h?h+":"+String(m).padStart(2,"0")+":"+String(sec).padStart(2,"0"):m+":"+String(sec).padStart(2,"0")}
+function renderContinueWatching(){
+  var section=$("continueSection"),grid=$("continueGrid");if(!section||!grid)return;
+  var items=readWatchProgress().filter(function(x){return x&&x.id&&Number(x.duration)>0&&Number(x.currentTime)>5&&Number(x.currentTime)/Number(x.duration)<.95}).sort(function(a,b){return(Number(b.updatedAt)||0)-(Number(a.updatedAt)||0)}).slice(0,8);
+  grid.innerHTML="";if(!items.length){section.hidden=true;return}section.hidden=false;
+  items.forEach(function(item){
+    var pct=Math.max(1,Math.min(99,Math.round(Number(item.currentTime)/Number(item.duration)*100)));
+    var a=document.createElement("a");a.className="resume-card";a.href="/watch?id="+encodeURIComponent(item.id);
+    var thumb=document.createElement("div");thumb.className="resume-thumb";
+    if(item.thumbnail&&/^https?:\/\//i.test(item.thumbnail)){var img=document.createElement("img");img.src=item.thumbnail;img.alt=item.title||"Video";img.loading="lazy";thumb.appendChild(img)}
+    var play=document.createElement("span");play.className="resume-play";play.textContent="▶";thumb.appendChild(play);
+    var info=document.createElement("div");info.className="resume-info";
+    var h=document.createElement("h3");h.textContent=item.title||"Continue watching";info.appendChild(h);
+    var bar=document.createElement("div");bar.className="resume-progress";var fill=document.createElement("span");fill.style.width=pct+"%";bar.appendChild(fill);info.appendChild(bar);
+    var time=document.createElement("div");time.className="resume-time";time.textContent=formatWatchTime(item.currentTime)+" / "+formatWatchTime(item.duration);info.appendChild(time);
+    a.appendChild(thumb);a.appendChild(info);grid.appendChild(a);
+  });
+}
+async function loadHomeTrending(){
+  var section=$("homeTrendingSection"),grid=$("homeTrendingGrid");if(!grid)return;
+  try{
+    var r=await fetch("/api/movies/trending");var d=await r.json();grid.innerHTML="";
+    if(!d.items||!d.items.length){if(section)section.hidden=true;return}
+    d.items.slice(0,8).forEach(function(m,i){
+      var a=document.createElement("a");a.className="home-trend-card";a.href="/watch?id="+encodeURIComponent(m.id);
+      var thumb=document.createElement("div");thumb.className="home-trend-thumb";
+      if(m.thumbnail&&/^https?:\/\//i.test(m.thumbnail)){var img=document.createElement("img");img.src=m.thumbnail;img.alt=m.title||"Video";img.loading="lazy";thumb.appendChild(img)}
+      var rank=document.createElement("span");rank.className="home-trend-rank";rank.textContent="#"+(i+1);thumb.appendChild(rank);
+      var info=document.createElement("div");info.className="home-trend-info";
+      var h=document.createElement("h3");h.textContent=m.title||"Video";info.appendChild(h);
+      var views=document.createElement("div");views.className="home-trend-views";views.textContent="👁 "+fmt(m.views||0)+" views";info.appendChild(views);
+      a.appendChild(thumb);a.appendChild(info);grid.appendChild(a);
+    });
+    if(section)section.hidden=false;
+  }catch(e){if(section)section.hidden=true}
+}
+
 function fmt(n){n=parseInt(n)||0;if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1e3)return(n/1e3).toFixed(1)+"K";return n}
 function esc(s){return String(s).replace(/[&<>]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;"}[c]})}
 function triggerSearch(){S=$("searchInput").value.trim();P=1;var u=new URL("https://adultmovie.top/");if(S)u.searchParams.set("search",S);location.href=u.pathname+u.search;}
@@ -859,6 +910,9 @@ async function load(p){
 }
 function pager(c,t){var el=$("pager");el.innerHTML="";if(t<=1)return;var pv=document.createElement("button");pv.textContent="« Prev";pv.disabled=c===1;pv.onclick=function(){load(c-1)};el.appendChild(pv);var st=Math.max(1,c-2),en=Math.min(t,st+4);if(en-st<4)st=Math.max(1,en-4);for(var i=st;i<=en;i++){(function(i){var b=document.createElement("button");b.textContent=i;if(i===c)b.classList.add("active");b.onclick=function(){load(i)};el.appendChild(b)})(i)}var nx=document.createElement("button");nx.textContent="Next »";nx.disabled=c===t;nx.onclick=function(){load(c+1)};el.appendChild(nx)}
 if($("searchInput"))$("searchInput").value=S;
+renderContinueWatching();
+window.addEventListener("pageshow",renderContinueWatching);
+loadHomeTrending();
 loadAds();
 loadAdFrameUrl().then(function(){load(1)});
 </script></body></html>`;
@@ -973,6 +1027,27 @@ function searchVideos(){var q=$("watchSearchInput").value.trim();var u=new URL("
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c]})}
 function fmt(n){n=parseInt(n)||0;if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1e3)return(n/1e3).toFixed(1)+"K";return n}
 function markWatched(id){try{var a=JSON.parse(localStorage.getItem("watched_ids")||"[]");var s=String(id);if(a.indexOf(s)===-1)a.push(s);if(a.length>500)a=a.slice(-500);localStorage.setItem("watched_ids",JSON.stringify(a))}catch(e){}}
+function getProgressList(){try{var a=JSON.parse(localStorage.getItem("watch_progress")||"[]");return Array.isArray(a)?a:[]}catch(e){return[]}}
+function saveWatchProgress(){
+  if(!movieData||!videoEl||!Number.isFinite(videoEl.duration)||videoEl.duration<=0||!Number.isFinite(videoEl.currentTime))return;
+  var current=videoEl.currentTime,duration=videoEl.duration;if(current<5)return;
+  try{
+    var a=getProgressList(),key=String(movieData.id),entry={id:key,title:movieData.title||"Video",thumbnail:movieData.thumbnail||"",currentTime:current,duration:duration,updatedAt:Date.now()};
+    a=a.filter(function(x){return String(x.id)!==key});
+    if(current/duration<.95)a.unshift(entry);
+    a=a.slice(0,30);localStorage.setItem("watch_progress",JSON.stringify(a));
+  }catch(e){}
+}
+function restoreWatchProgress(){
+  if(!movieData||!videoEl||!Number.isFinite(videoEl.duration)||videoEl.duration<=0)return;
+  try{
+    var key=String(movieData.id),item=getProgressList().find(function(x){return String(x.id)===key});
+    if(item&&Number(item.currentTime)>5&&Number(item.currentTime)<videoEl.duration-5){
+      videoEl.currentTime=Math.min(Number(item.currentTime),videoEl.duration-3);
+    }
+  }catch(e){}
+}
+
 function injectAds(id,code){var c=$(id);if(!c)return;c.innerHTML="";var t=document.createElement("div");t.innerHTML=code;var sc=[];Array.from(t.childNodes).forEach(function(n){if(n.tagName==="SCRIPT"){var s=document.createElement("script");if(n.src)s.src=n.src;else s.textContent=n.textContent;sc.push(s)}else{c.appendChild(n.cloneNode(true))}});sc.forEach(function(s){c.appendChild(s)})}
 var id=new URLSearchParams(location.search).get("id");
 var movieData=null,retryCount=0,maxRetries=3,adTimerInterval=null,adEndsAt=0,videoReady=false,videoEl=null,adClosed=false;
@@ -1197,6 +1272,12 @@ function playContent(){
   v.controls=true;v.autoplay=false;v.playsInline=true;v.preload="auto";
   v.style.cssText="width:100%;height:100%;object-fit:contain;background:#000";
   videoEl=v;
+  v.addEventListener("loadedmetadata",function(){restoreWatchProgress()},{once:true});
+  var lastProgressSave=0;
+  v.addEventListener("timeupdate",function(){if(!v.paused&&v.currentTime-lastProgressSave>=5){lastProgressSave=v.currentTime;saveWatchProgress()}});
+  v.addEventListener("pause",function(){lastProgressSave=v.currentTime||lastProgressSave;saveWatchProgress()});
+  v.addEventListener("ended",function(){try{var a=getProgressList().filter(function(x){return String(x.id)!==String(movieData.id)});localStorage.setItem("watch_progress",JSON.stringify(a))}catch(e){}});
+  window.addEventListener("pagehide",saveWatchProgress);
   var finished=false;
   function finish(state){
     if(finished)return;finished=true;
