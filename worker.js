@@ -22,6 +22,8 @@ export default {
     if (p === "/api/check-auth" && request.method === "GET") return checkAuth(request);
     if (p === "/api/ads" && request.method === "GET") return getAds(env);
     if (p === "/api/ads" && request.method === "POST") return saveAds(request, env);
+    if (p === "/api/home-mode" && request.method === "GET") return getHomeMode(env);
+    if (p === "/api/home-mode" && request.method === "POST") return saveHomeMode(request, env);
     if (p === "/api/interval-link" && request.method === "GET") return getIntervalLink(env);
     if (p === "/api/interval-link" && request.method === "POST") return saveIntervalLink(request, env);
     if (p === "/api/ad-frame" && request.method === "GET") return getAdFrame(env);
@@ -582,6 +584,11 @@ async function deleteMovie(request, env, path) {
 
 async function login(request) { const b = await request.json(); if (b.password === ADMIN_PASSWORD) return json({ success: true, token: ADMIN_PASSWORD }); return json({ error: "ভুল পাসওয়ার্ড" }, 401); }
 async function checkAuth(request) { const a = request.headers.get("X-Admin-Password"); if (a === ADMIN_PASSWORD) return json({ valid: true }); return json({ valid: false }, 401); }
+async function getHomeMode(env) { return json({ hidden: (await env.MOVIES.get("home_hidden")) === "1" }); }
+async function saveHomeMode(request, env) {
+  if (request.headers.get("X-Admin-Password") !== ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
+  const b = await request.json(); await env.MOVIES.put("home_hidden", b.hidden ? "1" : "0"); return json({ success: true, hidden: !!b.hidden });
+}
 async function getAds(env) {
   let cfg = {};
   try { cfg = JSON.parse((await env.MOVIES.get("ads_config")) || "{}"); } catch (e) {}
@@ -792,6 +799,7 @@ function bgScrape(movies){
 
 async function load(p){
   P=p;
+  try{var hm=await fetch("/api/home-mode");var hmd=await hm.json();if(hmd.hidden){var gg=$("grid");gg.innerHTML="";gg.style.display="block";gg.innerHTML='<div style="min-height:55vh;display:flex;align-items:center;justify-content:center;text-align:center;padding:30px"><div style="font-size:clamp(48px,12vw,110px);font-weight:900;letter-spacing:4px;color:#ff315f;text-shadow:0 0 25px rgba(255,49,95,.3);">COMING SOON</div></div>';$("pager").innerHTML="";var rm=document.getElementById("randomMiddleBanner");if(rm)rm.remove();if(MIDDLE_AD_CODE)injectAds("adMiddle",MIDDLE_AD_CODE);return;}$("grid").style.display="";}catch(e){}
   var u="/api/movies?page="+p+"&seed="+encodeURIComponent(SEED);
   var w=getWatched().join(",");
   if(w)u+="&watched="+encodeURIComponent(w);
@@ -1345,6 +1353,7 @@ function adminPage() {
   P.push('<button id="t2" data-tab="ad">📢 Ad</button>');
   P.push('<button id="t3" data-tab="il">⏱️ Interval</button>');
   P.push('<button id="t4" data-tab="bm">📌 Bookmarklet</button>');
+  P.push('<button id="t5" data-tab="hm">🏠 Home On/Off</button>');
   P.push('</div>');
   P.push('<div id="tm">');
   P.push('<div class="card paste-box"><h2 style="color:#00c853;margin-bottom:10px">📋 Paste View Source</h2><p class="hint" style="margin-bottom:10px;color:#aaddff">Video page → Ctrl+U → Ctrl+A → Ctrl+C → paste here</p><textarea id="viewSource" placeholder="Paste View Source here..." style="min-height:150px"></textarea><button class="primary" style="background:#00c853;margin-top:10px" id="parseSourceBtn">🔍 Extract & Fill</button><div id="psm" class="msg" style="margin-top:10px"></div></div>');
@@ -1377,6 +1386,7 @@ function adminPage() {
   P.push('<button class="primary" id="intervalLinkSaveBtn">Save</button>');
   P.push('<div id="ilm" class="msg"></div>');
   P.push('</div></div>');
+  P.push('<div id="thm" class="hidden"><div class="card"><h2>🏠 Home Content Switch</h2><p class="hint" style="color:#aaddff">Home page-এর ভিডিও/কন্টেন্ট লুক করে বড় COMING SOON দেখাবে। Ads থাকবে; Watch page ও ভিডিও লিংক অপরিবর্তিত থাকবে।</p><label style="display:flex;align-items:center;gap:12px;color:#eee"><input type="checkbox" id="homeHiddenToggle" style="width:auto"> Hide Home Content (Coming Soon)</label><button class="primary" id="homeModeSaveBtn">Save</button><div id="hmm" class="msg"></div></div></div>');
   P.push('<div id="tbm" class="hidden"><div class="card">');
   P.push('<h2>📌 Bookmarklet — IP Block Bypass</h2>');
   P.push('<p class="hint" style="color:#aaddff;margin-bottom:16px">Server থেকে embed site block হলে এই bookmarklet browser থেকে URL বের করে।</p>');
@@ -1411,6 +1421,7 @@ function adminPage() {
   P.push(' $("logoutBtn").onclick=logout;');
   P.push(' $("adsSaveBtn").onclick=saveAds;');
   P.push(' $("adFrameSaveBtn").onclick=saveAdFrame;');
+  P.push(' $("homeModeSaveBtn").onclick=saveHomeMode;');
   P.push(' $("intervalLinkSaveBtn").onclick=saveIntervalLink;');
   P.push(' $("parseSourceBtn").onclick=parseViewSource;');
   P.push(' document.querySelectorAll("[data-tab]").forEach(function(b){b.onclick=function(){tab(b.getAttribute("data-tab"))}});');
@@ -1421,15 +1432,16 @@ function adminPage() {
 
   P.push('async function verify(){try{var r=await fetch("/api/check-auth",{headers:{"X-Admin-Password":token}});return r.ok}catch(e){return false}}');
   P.push('async function doLogin(){var pwd=$("pwd").value;var m=$("lm");try{var r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pwd})});var d=await r.json();if(r.ok){token=d.token;localStorage.setItem("admin_token",token);show()}else{m.textContent=d.error||"Failed";m.className="msg err show"}}catch(e){m.textContent="Error: "+e.message;m.className="msg err show"}}');
-  P.push('function show(){$("login").classList.add("hidden");$("content").classList.remove("hidden");loadList();loadAds();loadIntervalLink();loadAdFrame()}');
+  P.push('function show(){$("login").classList.add("hidden");$("content").classList.remove("hidden");loadList();loadAds();loadIntervalLink();loadAdFrame();loadHomeMode()}');
   P.push('function logout(){localStorage.removeItem("admin_token");location.reload()}');
   P.push('function tab(n){');
-  P.push(' ["tm","tad","til","tbm"].forEach(function(x){var e=$(x);if(e)e.classList.add("hidden")});');
-  P.push(' ["t1","t2","t3","t4"].forEach(function(x){var e=$(x);if(e)e.classList.remove("active")});');
+  P.push(' ["tm","tad","til","tbm","thm"].forEach(function(x){var e=$(x);if(e)e.classList.add("hidden")});');
+  P.push(' ["t1","t2","t3","t4","t5"].forEach(function(x){var e=$(x);if(e)e.classList.remove("active")});');
   P.push(' if(n==="m"){$("tm").classList.remove("hidden");$("t1").classList.add("active")}');
   P.push(' if(n==="ad"){$("tad").classList.remove("hidden");$("t2").classList.add("active")}');
   P.push(' if(n==="il"){$("til").classList.remove("hidden");$("t3").classList.add("active")}');
-  P.push(' if(n==="bm"){$("tbm").classList.remove("hidden");$("t4").classList.add("active")}');
+  P.push(' if(n==="bm"){$("tbm").classList.remove("hidden");$("t4").classList.add("active")}
+  if(n==="hm"){$("thm").classList.remove("hidden");$("t5").classList.add("active")}');
   P.push('}');
   P.push('function reset(){$("eid").value="";$("title").value="";$("vurl").value="";$("thumb").value="";$("previewUrl").value="";$("videoIdField").value="";$("embedUrl").value="";$("contentUrl").value="";$("hlsUrl").value="";$("ft").textContent="Add / Edit Movie";$("sb").textContent="Add Movie";$("cb").classList.add("hidden");$("previewUrl").dataset.userEdited=""}');
   P.push('function parseViewSource(){');
@@ -1598,6 +1610,8 @@ function adminPage() {
   P.push('async function loadIntervalLink(){try{var r=await fetch("/api/interval-link");var d=await r.json();$("intervalLinkInput").value=d.url||"";$("intervalSecondsInput").value=d.seconds||60;$("intervalFirstDelayInput").value=d.firstDelay||15}catch(e){}}');
   P.push('async function saveIntervalLink(){var u=$("intervalLinkInput").value.trim();var s=parseInt($("intervalSecondsInput").value)||60;var f=parseInt($("intervalFirstDelayInput").value)||15;var m=$("ilm");if(s<5){m.textContent="Min 5s";m.className="msg err show";return}try{var r=await fetch("/api/interval-link",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({url:u,seconds:s,firstDelay:f})});if(r.ok){m.textContent="✅ Saved";m.className="msg ok show"}else{m.textContent="Failed";m.className="msg err show"}}catch(e){m.textContent=e.message;m.className="msg err show"}setTimeout(function(){m.classList.remove("show")},3000)}');
   P.push('async function loadAdFrame(){try{var r=await fetch("/api/ad-frame");var d=await r.json();$("adFrameUrl").value=d.url||""}catch(e){}}');
+  P.push('async function loadHomeMode(){try{var r=await fetch("/api/home-mode");var d=await r.json();$("homeHiddenToggle").checked=!!d.hidden}catch(e){}}');
+  P.push('async function saveHomeMode(){var hidden=$("homeHiddenToggle").checked,m=$("hmm");try{var r=await fetch("/api/home-mode",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({hidden:hidden})});if(r.ok){m.textContent=hidden?"✅ Home content hidden (Coming Soon)":"✅ Home content visible";m.className="msg ok show"}else{m.textContent="Failed";m.className="msg err show"}}catch(e){m.textContent=e.message;m.className="msg err show"}setTimeout(function(){m.classList.remove("show")},3000)}');
   P.push('async function saveAdFrame(){var u=$("adFrameUrl").value.trim();var m=$("afm");try{var r=await fetch("/api/ad-frame",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Password":token},body:JSON.stringify({url:u})});if(r.ok){m.textContent="✅ Saved";m.className="msg ok show"}else{m.textContent="Failed";m.className="msg err show"}}catch(e){m.textContent=e.message;m.className="msg err show"}setTimeout(function(){m.classList.remove("show")},2500)}');
   P.push('<\/script></body></html>');
   return P.join("\n");
