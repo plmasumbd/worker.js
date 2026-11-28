@@ -1440,8 +1440,8 @@ function adminPage() {
   P.push(' if(n==="m"){$("tm").classList.remove("hidden");$("t1").classList.add("active")}');
   P.push(' if(n==="ad"){$("tad").classList.remove("hidden");$("t2").classList.add("active")}');
   P.push(' if(n==="il"){$("til").classList.remove("hidden");$("t3").classList.add("active")}');
-  P.push(' if(n==="bm"){$("tbm").classList.remove("hidden");$("t4").classList.add("active")}
-  if(n==="hm"){$("thm").classList.remove("hidden");$("t5").classList.add("active")}');
+  P.push(' if(n==="bm"){$("tbm").classList.remove("hidden");$("t4").classList.add("active")}');
+  P.push(' if(n==="hm"){$("thm").classList.remove("hidden");$("t5").classList.add("active")}');
   P.push('}');
   P.push('function reset(){$("eid").value="";$("title").value="";$("vurl").value="";$("thumb").value="";$("previewUrl").value="";$("videoIdField").value="";$("embedUrl").value="";$("contentUrl").value="";$("hlsUrl").value="";$("ft").textContent="Add / Edit Movie";$("sb").textContent="Add Movie";$("cb").classList.add("hidden");$("previewUrl").dataset.userEdited=""}');
   P.push('function parseViewSource(){');
